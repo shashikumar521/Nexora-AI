@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { NexoraLogo } from './NexoraLogo';
 import { MemoryStatus } from '../types';
+import { formatModelDisplayName } from '../utils/format';
 
 interface ChatHeaderProps {
   onToggleSidebar: () => void;
@@ -68,7 +69,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           title="Click to view AI Model configuration"
         >
           <Sparkles className="w-3.5 h-3.5 text-[#818CF8]" />
-          <span className="font-medium font-sans">{activeModelName}</span>
+          <span className="font-medium font-sans">{formatModelDisplayName(activeModelName)}</span>
           <ChevronDown className="w-3 h-3 text-[#64748B]" />
         </button>
 
@@ -86,7 +87,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             Conversation Memory Active
           </span>
           <span className="font-mono text-[11px] px-2 py-0.5 rounded-md bg-[#6366F1]/20 text-[#A5B4FC] border border-[#6366F1]/30">
-            {hasSummary ? `${recentMsgs} msgs + running summary` : `${recentMsgs}/20 msgs`}
+            {hasSummary
+              ? `${recentMsgs} msgs + running summary`
+              : `${recentMsgs}/${memoryStatus?.maxRecentWindow || 25} msgs`}
           </span>
         </button>
 

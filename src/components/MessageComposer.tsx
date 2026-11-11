@@ -60,9 +60,15 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
             maxLength={MAX_CHARS}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message Nexora AI... (Enter to send, Shift+Enter for new line)"
-            className="flex-1 bg-transparent text-sm text-[#F8FAFC] placeholder-[#64748B] focus:outline-none resize-none py-1.5 max-h-40 leading-relaxed font-sans"
-            disabled={disabled}
+            placeholder={
+              isLoading
+                ? 'Nexora AI is responding...'
+                : 'Message Nexora AI... (Enter to send, Shift+Enter for new line)'
+            }
+            className={`flex-1 bg-transparent text-sm text-[#F8FAFC] placeholder-[#64748B] focus:outline-none resize-none py-1.5 max-h-40 leading-relaxed font-sans ${
+              isLoading ? 'opacity-60 cursor-not-allowed' : ''
+            }`}
+            disabled={isLoading || disabled}
           />
 
           {/* Right side controls: character counter & submit button */}
@@ -94,7 +100,7 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
 
       {/* Footer caption matching design */}
       <p className="text-[11px] text-center text-[#64748B] mt-2 font-sans select-none">
-        Nexora AI powered by Google Gemini API. Context window retains last 20 messages with adaptive summarization.
+        Nexora AI powered by Google Gemini API. Context window retains last 25 messages with adaptive summarization.
       </p>
     </div>
   );

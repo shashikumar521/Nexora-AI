@@ -12,11 +12,14 @@ import {
   BookOpen,
 } from 'lucide-react';
 
+import { formatModelDisplayName } from '../utils/format';
+
 interface NewChatHomeProps {
   onSelectPrompt: (promptText: string) => void;
+  activeModelName?: string;
 }
 
-export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt }) => {
+export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, activeModelName }) => {
   const suggestions = [
     {
       title: 'Learn Something',
@@ -81,7 +84,9 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt }) => {
       <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[#1E293B]/80 border border-[#6366F1]/30 text-xs text-[#CBD5E1] mb-5 shadow-sm">
         <span className="flex items-center gap-1 text-[#FBBF24]">
           <Zap className="w-3.5 h-3.5 fill-current" />
-          <span className="font-medium text-[#F8FAFC]">Powered by Google Gemini API</span>
+          <span className="font-medium text-[#F8FAFC]">
+            Powered by Google {formatModelDisplayName(activeModelName)}
+          </span>
         </span>
         <span className="text-white/20">•</span>
         <span className="text-[#94A3B8]">Real-time Multi-turn Context</span>
@@ -145,7 +150,7 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt }) => {
           <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0" />
           <span className="text-[#CBD5E1]">
             <strong className="text-white font-medium">Active Context:</strong> Conversation memory
-            automatically retains up to 20 messages with progressive real-time summarization.
+            automatically retains up to 25 messages with progressive real-time summarization.
           </span>
         </div>
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1F2937] text-[11px] font-mono text-[#38BDF8] border border-white/5 shrink-0">

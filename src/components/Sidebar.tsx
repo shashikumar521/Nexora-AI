@@ -323,18 +323,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-3 border-t border-white/5 space-y-2">
           {/* User Card */}
           <div className="flex items-center gap-3 p-2 rounded-xl bg-[#111827] border border-white/5">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#6366F1] to-[#EC4899] flex items-center justify-center font-display font-bold text-xs text-white shadow-xs">
-              AM
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#6366F1] to-[#8B5CF6] flex items-center justify-center font-display font-bold text-xs text-white shadow-xs">
+              NU
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-white truncate">Alex Morgan</span>
+                <span className="text-xs font-semibold text-white truncate">Nexora User</span>
                 <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-[#6366F1]/20 text-[#A5B4FC] border border-[#6366F1]/30">
-                  Pro Tier
+                  Workspace
                 </span>
               </div>
               <span className="text-[11px] text-[#64748B] block truncate">
-                alex@workspace.ai
+                Local Session • SQLite
               </span>
             </div>
           </div>

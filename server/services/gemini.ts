@@ -1,6 +1,6 @@
-import { GoogleGenAI, GenerateContentResponse } from '@google/genai';
-import { NEXORA_SYSTEM_PROMPT } from '../prompts/systemPrompt.js';
-import { conversationQueries, messageQueries, DBMessage } from '../db/database.js';
+import { GoogleGenAI } from '@google/genai';
+import { NEXORA_SYSTEM_PROMPT } from '../prompts/systemPrompt.ts';
+import { conversationQueries, messageQueries } from '../db/database.ts';
 
 export const DEPRECATED_MODELS = [
   'gemini-1.5-flash',
@@ -41,19 +41,19 @@ const getGenAIClient = () => {
 };
 
 /**
- * Summarizes older messages when conversation history exceeds the 20-message window
+ * Summarizes older messages when conversation history exceeds the 25-message window
  */
 export async function updateRunningSummaryIfNeeded(conversationId: string): Promise<string> {
   const conv = conversationQueries.getById(conversationId);
   if (!conv) return '';
 
   const totalCount = messageQueries.getCountByConversation(conversationId);
-  if (totalCount <= 20) {
+  if (totalCount <= 25) {
     return conv.running_summary || '';
   }
 
-  // Get older messages that fall outside the 20 most recent
-  const olderMessages = messageQueries.getOlderMessages(conversationId, 20);
+  // Get older messages that fall outside the 25 most recent
+  const olderMessages = messageQueries.getOlderMessages(conversationId, 25);
   if (olderMessages.length === 0) {
     return conv.running_summary || '';
   }
@@ -127,7 +127,7 @@ export async function generateConversationTitle(userMessage: string): Promise<st
 }
 
 /**
- * Construct the full context for Gemini (System instructions + Running Summary + Last 20 messages)
+ * Construct the full context for Gemini (System instructions + Running Summary + Last 25 messages)
  */
 export async function buildConversationContext(conversationId: string, newUserMessage?: string) {
   // 1. Check & update running summary if needed
@@ -139,8 +139,8 @@ export async function buildConversationContext(conversationId: string, newUserMe
     systemInstruction += `\n\n[CONVERSATION RUNNING SUMMARY OF EARLIER TURNS]\n${runningSummary}\n[END RUNNING SUMMARY]`;
   }
 
-  // 3. Retrieve up to 20 most recent messages in chronological order
-  const recentMessages = messageQueries.getRecentMessages(conversationId, 20);
+  // 3. Retrieve up to 25 most recent messages in chronological order
+  const recentMessages = messageQueries.getRecentMessages(conversationId, 25);
 
   // 4. Map DB messages to Gemini Content objects with strict role alternation
   const contents: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];

@@ -1,16 +1,17 @@
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import {
   conversationQueries,
   messageQueries,
   settingsQueries,
-} from '../db/database.js';
+  db,
+} from '../db/database.ts';
 import {
   generateChatResponse,
   streamChatResponse,
   generateConversationTitle,
   getActiveModel,
-} from '../services/gemini.js';
+} from '../services/gemini.ts';
 
 export const apiRouter = Router();
 
@@ -181,7 +182,7 @@ apiRouter.get('/conversations/:id/memory', (req: Request, res: Response) => {
     }
 
     const totalMessages = messageQueries.getCountByConversation(id);
-    const recentMessages = messageQueries.getRecentMessages(id, 20);
+    const recentMessages = messageQueries.getRecentMessages(id, 25);
 
     // Calculate approximate tokens for active context window
     const recentTokens = recentMessages.reduce((sum, m) => sum + (m.tokens || Math.round(m.content.length / 4)), 0);
@@ -190,10 +191,10 @@ apiRouter.get('/conversations/:id/memory', (req: Request, res: Response) => {
 
     res.json({
       conversationId: id,
-      strategy: 'Last 20 messages + cumulative running summary',
+      strategy: 'Last 25 messages + cumulative running summary',
       totalStoredMessages: totalMessages,
       recentMessagesCount: recentMessages.length,
-      maxRecentWindow: 20,
+      maxRecentWindow: 25,
       hasRunningSummary: Boolean(conversation.running_summary && conversation.running_summary.trim()),
       runningSummary: conversation.running_summary || null,
       activeContextTokens: totalActiveTokens,
@@ -218,6 +219,34 @@ apiRouter.post('/conversations/:id/clear', (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to reset context', details: error.message });
   }
 });
+
+function sanitizeErrorMessage(err: any): string {
+  if (!err) return 'An error occurred while communicating with Gemini API.';
+  const msg = typeof err === 'string' ? err : err.message || '';
+  const status = err.status || err.code;
+
+  if (status === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota exceeded') || msg.includes('429')) {
+    return 'Gemini API rate limit exceeded. Please wait a moment and try again.';
+  }
+  if (status === 403 || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
+    return 'Permission denied. Please check your Gemini API key in AI Studio Secrets.';
+  }
+  if (msg.includes('Timeout') || msg.includes('timed out')) {
+    return 'Request timed out waiting for the AI model to respond. Please try again.';
+  }
+  if (status === 503 || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+    return 'The AI model is currently busy. Please retry in a few moments.';
+  }
+
+  // Strip any API keys, URLs, or internal filesystem paths
+  const clean = msg
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
+    .replace(/key=[^&\s]+/gi, 'key=[REDACTED]')
+    .replace(/https?:\/\/[^\s]+/g, '[REDACTED_URL]')
+    .replace(/\/app\/[^\s:]+/g, '[INTERNAL_PATH]');
+
+  return clean.trim() || 'An error occurred while generating the response from Gemini.';
+}
 
 /**
  * POST /api/chat/:id
@@ -292,6 +321,7 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
       );
 
       // Send completion event
+
       res.write(
         `data: ${JSON.stringify({
           type: 'done',
@@ -304,16 +334,15 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
       );
       res.end();
     } catch (err: any) {
-      console.error('[API] Streaming error in chat route:', err);
-      let errorMessage = 'An error occurred while generating the response from Gemini.';
-      if (err.status === 429 || err.message?.includes('RESOURCE_EXHAUSTED')) {
-        errorMessage = 'Gemini API rate limit exceeded. Please wait a moment and try again.';
-      } else if (err.status === 403 || err.message?.includes('PERMISSION_DENIED')) {
-        errorMessage = 'Permission denied. Please check your Gemini API key in AI Studio Secrets.';
-      } else if (err.message) {
-        errorMessage = err.message;
+      console.error('[API] Streaming error in chat route:', err?.message || err);
+      // Remove unanswered user message so failed turn leaves no corrupt or orphan entry in SQLite
+      try {
+        db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId);
+      } catch (cleanErr) {
+        console.warn('[API] Could not clean up failed user message:', cleanErr);
       }
 
+      const errorMessage = sanitizeErrorMessage(err);
       res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
       res.end();
     }
@@ -343,15 +372,15 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
         runningSummary: result.runningSummary,
       });
     } catch (err: any) {
-      console.error('[API] Error generating chat response:', err);
-      let errorMessage = 'An error occurred while communicating with Gemini API.';
-      if (err.status === 429 || err.message?.includes('RESOURCE_EXHAUSTED')) {
-        errorMessage = 'Gemini API rate limit reached. Please wait a moment.';
-      } else if (err.status === 403 || err.message?.includes('PERMISSION_DENIED')) {
-        errorMessage = 'Permission denied. Please verify your Gemini API key.';
-      } else if (err.message) {
-        errorMessage = err.message;
+      console.error('[API] Error generating chat response:', err?.message || err);
+      // Remove unanswered user message so failed turn leaves no corrupt or orphan entry in SQLite
+      try {
+        db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId);
+      } catch (cleanErr) {
+        console.warn('[API] Could not clean up failed user message:', cleanErr);
       }
+
+      const errorMessage = sanitizeErrorMessage(err);
       res.status(500).json({ error: errorMessage });
     }
   }
@@ -361,7 +390,7 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
  * POST /api/conversations/:id/regenerate
  * Remove last assistant message and re-run with previous user message
  */
-apiRouter.post('/api/conversations/:id/regenerate', async (req: Request, res: Response) => {
+apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const messages = messageQueries.getByConversation(id);
@@ -374,7 +403,6 @@ apiRouter.post('/api/conversations/:id/regenerate', async (req: Request, res: Re
 
     if (lastMsg.role === 'assistant') {
       // Delete last assistant message
-      const db = (await import('../db/database.js')).db;
       db.prepare('DELETE FROM messages WHERE id = ?').run(lastMsg.id);
 
       // Find the user prompt right before it

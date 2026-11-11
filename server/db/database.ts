@@ -163,7 +163,7 @@ export const messageQueries = {
     return result ? result.count : 0;
   },
 
-  getRecentMessages: (conversationId: string, limit: number = 20): DBMessage[] => {
+  getRecentMessages: (conversationId: string, limit: number = 25): DBMessage[] => {
     // Get the most recent N messages, returned in chronological order
     const stmt = db.prepare(`
       SELECT * FROM (
@@ -176,7 +176,7 @@ export const messageQueries = {
     return stmt.all(conversationId, limit) as DBMessage[];
   },
 
-  getOlderMessages: (conversationId: string, excludeRecentCount: number = 20): DBMessage[] => {
+  getOlderMessages: (conversationId: string, excludeRecentCount: number = 25): DBMessage[] => {
     // Messages older than the most recent N
     const stmt = db.prepare(`
       SELECT * FROM messages 

@@ -17,6 +17,7 @@ import {
   RotateCcw,
   ExternalLink,
 } from 'lucide-react';
+import { formatModelDisplayName } from '../utils/format';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -438,8 +439,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div>
                     <span className="text-xs text-[#64748B] block">CONFIGURED BACKEND MODEL</span>
                     <span className="font-mono text-sm font-bold text-white">
-                      {activeModelName}
+                      {formatModelDisplayName(activeModelName)}
                     </span>
+                    {activeModelName && activeModelName !== formatModelDisplayName(activeModelName) && (
+                      <span className="font-mono text-[11px] text-[#818CF8] block">
+                        ID: {activeModelName}
+                      </span>
+                    )}
                   </div>
                   <div className="text-right">
                     <span className="text-xs text-[#64748B] block">AVG LATENCY</span>
@@ -492,10 +498,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                   <ul className="list-disc pl-5 space-y-1 text-[#94A3B8]">
                     <li>
-                      <strong className="text-white">Recent Buffer:</strong> The 20 most recent messages are kept in complete, verbatim chronological order for zero-loss immediate context.
+                      <strong className="text-white">Recent Buffer:</strong> The 25 most recent messages are kept in complete, verbatim chronological order for zero-loss immediate context.
                     </li>
                     <li>
-                      <strong className="text-white">Progressive Running Summary:</strong> When history grows beyond 20 messages, older messages are synthesized into a consolidated running summary that preserves vital personal details, code decisions, and prior conclusions.
+                      <strong className="text-white">Progressive Running Summary:</strong> When history grows beyond 25 messages, older messages are synthesized into a consolidated running summary that preserves vital personal details, code decisions, and prior conclusions.
                     </li>
                     <li>
                       <strong className="text-white">Strict Isolation:</strong> Each conversation has its own unique ID and isolated memory record in SQLite.
@@ -508,7 +514,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[#94A3B8]">Active Conversation Buffer</span>
                     <span className="font-mono text-white">
-                      {memoryStatus?.recentMessagesCount || 0} / 20 messages in direct window
+                      {memoryStatus?.recentMessagesCount || 0} / {memoryStatus?.maxRecentWindow || 25} messages in direct window
                     </span>
                   </div>
 
@@ -630,7 +636,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <h3 className="font-display font-bold text-lg text-white">Nexora AI</h3>
                 <span className="text-xs font-mono text-[#818CF8]">v1.0 Production Release</span>
                 <p className="text-xs text-[#94A3B8] max-w-md mx-auto mt-2 leading-relaxed">
-                  Built with React.js & Google Gemini API. Empowering seamless human-agent cognitive workflow with 20-message memory and continuous progressive summarization.
+                  Built with React.js & Google Gemini API. Empowering seamless human-agent cognitive workflow with 25-message memory and continuous progressive summarization.
                 </p>
               </div>
 

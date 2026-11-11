@@ -115,14 +115,21 @@ export const api = {
     })
       .then(async (response) => {
         if (!response.ok) {
-          const errData = await response.json().catch(() => ({ error: 'Server error occurred' }));
-          onError(errData.error || `HTTP ${response.status}`);
+          const errData = await response.json().catch(() => ({ error: '' }));
+          let msg = errData.error;
+          if (!msg) {
+            if (response.status === 429) msg = 'Gemini API rate limit exceeded. Please wait a moment and try again.';
+            else if (response.status === 503) msg = 'The AI model is currently busy. Please retry in a few moments.';
+            else if (response.status === 403) msg = 'Permission denied. Please verify your Gemini API key in AI Studio Secrets.';
+            else msg = `Server error (${response.status}). Please try again.`;
+          }
+          onError(msg);
           return;
         }
 
         const reader = response.body?.getReader();
         if (!reader) {
-          onError('Failed to initialize stream reader');
+          onError('Failed to initialize stream reader. Please try again.');
           return;
         }
 
@@ -154,7 +161,7 @@ export const api = {
                   runningSummary: data.runningSummary,
                 });
               } else if (data.type === 'error') {
-                onError(data.error || 'Stream error');
+                onError(data.error || 'Gemini encountered an issue generating a response.');
               }
             } catch {
               // Ignore partial JSON
@@ -167,7 +174,7 @@ export const api = {
           // Stream cancelled by user
           onDone({ model: 'Cancelled by user' });
         } else {
-          onError(err.message || 'Network connection failed');
+          onError(err.message?.includes('fetch') ? 'Unable to reach the server. Please check your internet connection.' : (err.message || 'Network request failed'));
         }
       });
   },

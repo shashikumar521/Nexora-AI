@@ -18,7 +18,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
   if (!isOpen) return null;
 
   const recentCount = memoryStatus?.recentMessagesCount || 0;
-  const maxRecent = memoryStatus?.maxRecentWindow || 20;
+  const maxRecent = memoryStatus?.maxRecentWindow || 25;
   const totalCount = memoryStatus?.totalStoredMessages || 0;
   const hasSummary = memoryStatus?.hasRunningSummary || false;
   const summary = memoryStatus?.runningSummary || '';
@@ -59,12 +59,12 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="text-[#94A3B8]">Context Architecture:</span>
               <span className="font-mono text-[#38BDF8] bg-[#38BDF8]/10 px-2 py-0.5 rounded border border-[#38BDF8]/20">
-                Last 20 Messages + Running Summary
+                Last {maxRecent} Messages + Running Summary
               </span>
             </div>
             <p className="text-xs text-[#CBD5E1] leading-relaxed">
-              Nexora AI maintains the most recent 20 conversational turns in full chronological detail.
-              When messages exceed 20 turns, earlier turns are automatically consolidated into a cumulative
+              Nexora AI maintains the most recent {maxRecent} conversational turns in full chronological detail.
+              When messages exceed {maxRecent} turns, earlier turns are automatically consolidated into a cumulative
               running summary preserving user goals, code decisions, and context.
             </p>
           </div>
@@ -134,7 +134,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
                     : 'bg-white/5 text-[#64748B]'
                 }`}
               >
-                {hasSummary ? 'Consolidated' : 'Not Needed Yet (< 20 msgs)'}
+                {hasSummary ? 'Consolidated' : `Not Needed Yet (< ${maxRecent} msgs)`}
               </span>
             </div>
 
@@ -145,7 +145,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
             ) : (
               <p className="text-xs text-[#64748B] italic">
                 All {totalCount} conversation message{totalCount === 1 ? '' : 's'} fit completely inside
-                the high-fidelity 20-message direct context buffer. When earlier messages age out,
+                the high-fidelity {maxRecent}-message direct context buffer. When earlier messages age out,
                 their facts, preferences, and technical conclusions will be summarized here.
               </p>
             )}

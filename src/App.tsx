@@ -9,7 +9,8 @@ import { NewChatHome } from './components/NewChatHome';
 import { SettingsModal } from './components/SettingsModal';
 import { MemoryModal } from './components/MemoryModal';
 import { MobileNav } from './components/MobileNav';
-import { AlertCircle, Check } from 'lucide-react';
+import { formatModelDisplayName } from './utils/format';
+import { AlertCircle, Check, RotateCw } from 'lucide-react';
 
 export default function App() {
   // App state
@@ -18,10 +19,15 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const [streamingMessage, setStreamingMessage] = useState<string>('');
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
+
+  // Dynamic configured model fetched from backend
+  const [backendModel, setBackendModel] = useState<string>('');
 
   // Modals & Drawers
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -37,11 +43,16 @@ export default function App() {
     streamResponses: true,
     showSyntaxHighlighting: true,
     language: 'en-US',
-    model: 'gemini-3.1-flash-lite',
+    model: '',
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isSubmittingRef = useRef(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Current active model to display everywhere
+  const activeModel = backendModel || settings.model || 'gemini-3.1-flash-lite';
 
   // Apply theme to HTML root
   useEffect(() => {
@@ -81,9 +92,17 @@ export default function App() {
     }
   }, [activeConversationId]);
 
-  // Scroll to bottom when messages change or streaming updates
+  // Automatic scrolling: immediate during streaming to avoid lag, smooth upon completion
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (streamingMessage) {
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, streamingMessage]);
 
   // Global keyboard shortcuts (⌘N for New Chat, Esc to cancel stream)
@@ -105,8 +124,19 @@ export default function App() {
 
   const loadSettings = async () => {
     try {
-      const data = await api.getSettings();
-      setSettings(data);
+      const [settingsData, healthData] = await Promise.allSettled([
+        api.getSettings(),
+        api.getHealth(),
+      ]);
+
+      if (settingsData.status === 'fulfilled') {
+        setSettings(settingsData.value);
+      }
+      if (healthData.status === 'fulfilled' && healthData.value.model) {
+        setBackendModel(healthData.value.model);
+      } else if (settingsData.status === 'fulfilled' && settingsData.value.model) {
+        setBackendModel(settingsData.value.model);
+      }
     } catch (e) {
       console.warn('Failed to fetch settings from server, using defaults:', e);
     }
@@ -142,6 +172,7 @@ export default function App() {
   const handleNewChat = async () => {
     try {
       setErrorBanner(null);
+      setLastFailedPrompt(null);
       const newConv = await api.createConversation('New Chat');
       setConversations((prev) => [newConv, ...prev]);
       setActiveConversationId(newConv.id);
@@ -154,6 +185,7 @@ export default function App() {
 
   const handleSelectConversation = (id: string) => {
     setErrorBanner(null);
+    setLastFailedPrompt(null);
     setActiveConversationId(id);
   };
 
@@ -194,9 +226,13 @@ export default function App() {
 
   const handleSendMessage = async (textToSend?: string) => {
     const prompt = (textToSend || inputMessage).trim();
-    if (!prompt || isLoading) return;
 
+    // Prevent duplicate submissions and invalid requests
+    if (!prompt || isLoading || isSubmittingRef.current) return;
+
+    isSubmittingRef.current = true;
     setErrorBanner(null);
+    setLastFailedPrompt(null);
     setInputMessage('');
 
     let convId = activeConversationId;
@@ -209,12 +245,13 @@ export default function App() {
         setActiveConversationId(newConv.id);
         convId = newConv.id;
       } catch (err: any) {
-        setErrorBanner('Failed to create conversation session');
+        isSubmittingRef.current = false;
+        setErrorBanner('Failed to create conversation session. Please try again.');
         return;
       }
     }
 
-    // Optimistically append user message
+    // Optimistically append user message (retained across errors)
     const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
       conversation_id: convId,
@@ -242,6 +279,7 @@ export default function App() {
       },
       (meta) => {
         setIsLoading(false);
+        isSubmittingRef.current = false;
         setStreamingMessage('');
         abortControllerRef.current = null;
 
@@ -252,7 +290,7 @@ export default function App() {
             role: 'assistant',
             content: accumulatedText,
             created_at: new Date().toISOString(),
-            model: meta.model || settings.model,
+            model: meta.model || activeModel,
             latencyMs: meta.latencyMs || 420,
             tokens: meta.tokens || Math.round(accumulatedText.length / 4),
           };
@@ -265,9 +303,11 @@ export default function App() {
       },
       (error) => {
         setIsLoading(false);
+        isSubmittingRef.current = false;
         setStreamingMessage('');
         abortControllerRef.current = null;
         setErrorBanner(error);
+        setLastFailedPrompt(prompt);
       }
     );
   };
@@ -278,13 +318,17 @@ export default function App() {
       abortControllerRef.current = null;
     }
     setIsLoading(false);
+    isSubmittingRef.current = false;
   };
 
   const handleRegenerate = async () => {
-    if (!activeConversationId || isLoading) return;
+    if (!activeConversationId || isLoading || isRegenerating) return;
     try {
       setIsLoading(true);
+      setIsRegenerating(true);
       setErrorBanner(null);
+      setLastFailedPrompt(null);
+
       const result = await api.regenerate(activeConversationId);
       setMessages((prev) => {
         const copy = [...prev];
@@ -295,9 +339,11 @@ export default function App() {
       });
       loadMemoryStatus(activeConversationId);
     } catch (e: any) {
-      setErrorBanner(e.message || 'Failed to regenerate response');
+      setErrorBanner(e.message || 'Failed to regenerate response from Gemini API.');
     } finally {
       setIsLoading(false);
+      setIsRegenerating(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -345,13 +391,14 @@ export default function App() {
     }
 
     let fileContent = '';
-    let fileName = `nexora-transcript-${Date.now()}.${format === 'json' ? 'json' : 'md'}`;
-    let mimeType = format === 'json' ? 'application/json' : 'text/markdown';
+    const fileName = `nexora-transcript-${Date.now()}.${format === 'json' ? 'json' : 'md'}`;
+    const mimeType = format === 'json' ? 'application/json' : 'text/markdown';
 
     if (format === 'json') {
       fileContent = JSON.stringify({ conversation: activeConversationId, messages }, null, 2);
     } else {
-      fileContent = `# Nexora AI Transcript\n\nExported: ${new Date().toLocaleString()}\n\n` +
+      fileContent =
+        `# Nexora AI Transcript\n\nExported: ${new Date().toLocaleString()}\n\n` +
         messages
           .map((m) => `### ${m.role === 'user' ? 'User' : 'Nexora AI'} (${m.created_at})\n\n${m.content}\n\n---`)
           .join('\n\n');
@@ -382,7 +429,7 @@ export default function App() {
   // Dynamic suggested prompts for active chat
   const suggestedFollowUps = [
     'Explain how this concept applies in real-world software architecture.',
-    'Can you provide a simple Python code example demonstrating this?',
+    'Can you provide a simple code example demonstrating this?',
     'What are the key trade-offs and potential edge-case pitfalls?',
   ];
 
@@ -411,7 +458,7 @@ export default function App() {
       />
 
       {/* Main Conversation Canvas */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent relative">
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent relative min-w-0">
         {/* Chat Header */}
         <ChatHeader
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -420,7 +467,7 @@ export default function App() {
           onResetContext={handleResetContext}
           onClearContext={handleResetContext}
           onShare={handleShare}
-          activeModelName={settings.model || 'Gemini 3.8 Flash'}
+          activeModelName={activeModel}
           theme={settings.theme}
           onToggleTheme={() =>
             handleSaveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
@@ -436,28 +483,65 @@ export default function App() {
           </div>
         )}
 
-        {/* Error Notification Banner */}
+        {/* Error Notification Banner with Retry */}
         {errorBanner && (
-          <div className="mx-4 mt-3 flex items-center justify-between p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-200 shadow-lg">
-            <div className="flex items-center gap-2.5">
+          <div className="mx-2 sm:mx-4 mt-3 flex items-center justify-between p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-xs text-red-200 shadow-lg gap-2 flex-wrap sm:flex-nowrap">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-              <span>{errorBanner}</span>
+              <span className="leading-relaxed break-words">{errorBanner}</span>
             </div>
-            <button
-              onClick={() => setErrorBanner(null)}
-              className="text-red-300 hover:text-white px-2 py-0.5"
-            >
-              Dismiss
-            </button>
+            <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
+              {lastFailedPrompt && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = lastFailedPrompt;
+                    setLastFailedPrompt(null);
+                    setErrorBanner(null);
+                    setMessages((prev) => {
+                      if (
+                        prev.length > 0 &&
+                        prev[prev.length - 1].role === 'user' &&
+                        prev[prev.length - 1].content === p
+                      ) {
+                        return prev.slice(0, -1);
+                      }
+                      return prev;
+                    });
+                    handleSendMessage(p);
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium cursor-pointer transition-colors shadow-xs"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  <span>Retry</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setErrorBanner(null);
+                  setLastFailedPrompt(null);
+                }}
+                className="text-red-300 hover:text-white px-2 py-1 rounded cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
         {/* Chat Message Stream / New Chat Home */}
-        <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col">
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto px-2 sm:px-4 py-4 sm:py-6 flex flex-col min-w-0"
+        >
           {messages.length === 0 && !streamingMessage ? (
-            <NewChatHome onSelectPrompt={(prompt) => handleSendMessage(prompt)} />
+            <NewChatHome
+              onSelectPrompt={(prompt) => handleSendMessage(prompt)}
+              activeModelName={activeModel}
+            />
           ) : (
-            <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full">
+            <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full min-w-0">
               {messages.map((msg, idx) => {
                 const isLast = idx === messages.length - 1;
                 return (
@@ -465,9 +549,10 @@ export default function App() {
                     key={msg.id || idx}
                     message={msg}
                     onRegenerate={isLast && msg.role === 'assistant' ? handleRegenerate : undefined}
+                    isRegenerating={isRegenerating}
                     onSuggestedPrompt={(p) => handleSendMessage(p)}
                     suggestedPrompts={isLast && msg.role === 'assistant' ? suggestedFollowUps : []}
-                    activeModelName={settings.model}
+                    activeModelName={activeModel}
                   />
                 );
               })}
@@ -481,21 +566,21 @@ export default function App() {
                     role: 'assistant',
                     content: streamingMessage,
                     created_at: new Date().toISOString(),
-                    model: settings.model,
+                    model: activeModel,
                   }}
                   isStreaming={true}
                   onStopStreaming={handleStopStreaming}
-                  activeModelName={settings.model}
+                  activeModelName={activeModel}
                 />
               )}
 
               {/* Loading spinner if waiting for first token */}
               {isLoading && !streamingMessage && (
                 <div className="flex items-center gap-3 p-4 text-xs text-[#94A3B8]">
-                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center animate-pulse">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center animate-pulse shrink-0">
                     <span className="w-2 h-2 rounded-full bg-white" />
                   </div>
-                  <span>Nexora AI is thinking and retrieving context memory...</span>
+                  <span>Nexora AI is thinking with {formatModelDisplayName(activeModel)}...</span>
                 </div>
               )}
 
@@ -532,7 +617,7 @@ export default function App() {
         onClearCurrentChat={handleResetContext}
         onClearAllData={handleClearAllData}
         onExportTranscripts={handleExportTranscripts}
-        activeModelName={settings.model}
+        activeModelName={activeModel}
       />
 
       {/* Conversation Memory Inspector Modal */}
@@ -554,15 +639,15 @@ export default function App() {
             <div className="space-y-2 text-xs text-[#CBD5E1] bg-[#111827] p-3 rounded-xl border border-white/5 mb-4">
               <div className="flex justify-between">
                 <span className="text-[#64748B]">Context Strategy</span>
-                <span className="font-mono text-[#818CF8]">Last 20 msgs + Running Summary</span>
+                <span className="font-mono text-[#818CF8]">Last 25 msgs + Running Summary</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#64748B]">AI Engine</span>
-                <span className="font-mono text-white">Google Gemini API</span>
+                <span className="text-[#64748B]">Configured AI Model</span>
+                <span className="font-mono text-white">{formatModelDisplayName(activeModel)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[#64748B]">Persistent DB</span>
-                <span className="font-mono text-emerald-400">SQLite v3.44</span>
+                <span className="font-mono text-emerald-400">SQLite v3.44 (WAL)</span>
               </div>
             </div>
             <button

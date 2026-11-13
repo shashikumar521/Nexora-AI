@@ -8,6 +8,7 @@ import {
   settingsQueries,
   testDatabaseConnection,
   getDatabaseProviderName,
+  ensureDatabaseReady,
 } from '../db/database.ts';
 import {
   requireAuth,
@@ -251,23 +252,85 @@ apiRouter.get('/conversations', async (req: AuthenticatedRequest, res: Response)
  * Create a new conversation owned by the verified authenticated user
  */
 apiRouter.post('/conversations', async (req: AuthenticatedRequest, res: Response) => {
+  const id = randomUUID();
+  console.log('[API][POST /api/conversations] 1. Request received', {
+    hasBody: Boolean(req.body && typeof req.body === 'object'),
+  });
+
   try {
+    console.log('[API][POST /api/conversations] 2. Authentication verified', {
+      status: 'user authenticated',
+    });
+
     const auth = getAuthContext(req);
-    const id = randomUUID();
+    console.log('[API][POST /api/conversations] 3. User UID obtained', {
+      status: 'user UID present',
+      uidLength: auth.uid.length,
+    });
+
+    const provider = await ensureDatabaseReady();
+    console.log('[API][POST /api/conversations] 4. Database initialized', {
+      status: 'database initialized',
+      provider,
+    });
+
     const rawTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
     const title = (rawTitle || 'New Chat').slice(0, 200);
+
+    console.log('[API][POST /api/conversations] 5. Conversation creation started', {
+      conversationId: id,
+      provider,
+    });
+
     const conversation = await conversationQueries.create(auth, id, title);
     if (!conversation?.id) {
-      return res.status(500).json({ error: 'Database did not confirm conversation creation.' });
+      console.error('[API][POST /api/conversations] conversation creation failed', {
+        reason: 'missing conversation id returned from storage',
+        provider,
+      });
+      return res.status(500).json({
+        error: 'Failed to create conversation session',
+        code: 'CONVERSATION_CREATE_FAILED',
+      });
     }
-    res.status(201).json({ conversation });
+
+    console.log('[API][POST /api/conversations] 6. Conversation created', {
+      conversationId: conversation.id,
+      provider,
+    });
+
+    res.status(201).json({
+      conversation,
+      conversationId: conversation.id,
+    });
+
+    console.log('[API][POST /api/conversations] 7. Response returned', {
+      status: 201,
+      conversationId: conversation.id,
+    });
   } catch (error: unknown) {
-    return handleRouteError(
-      'POST /conversations',
-      error,
-      res,
-      'Failed to create conversation session in persistent storage.'
-    );
+    const classified = classifyRouteError(error);
+    const provider = getDatabaseProviderName();
+    const adminStatus = getFirebaseAdminStatus();
+    const responseCode =
+      classified.category === 'APP_ERROR' || classified.category === 'DATABASE_ERROR'
+        ? 'CONVERSATION_CREATE_FAILED'
+        : classified.category;
+
+    console.error('[API][POST /api/conversations] conversation creation failed', {
+      category: classified.category,
+      code: responseCode,
+      httpStatus: classified.httpStatus,
+      provider,
+      firebaseAdminConfigured: adminStatus.configured,
+      firebaseAdminInitialized: adminStatus.initialized,
+      message: classified.message,
+    });
+
+    return res.status(classified.httpStatus).json({
+      error: classified.message || 'Failed to create conversation session',
+      code: responseCode,
+    });
   }
 });
 

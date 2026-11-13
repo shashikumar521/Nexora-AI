@@ -341,6 +341,17 @@ export function getDatabaseProviderName(): string {
   return process.env.VERCEL ? 'Database (unconfigured)' : 'Cloud Firestore';
 }
 
+export async function ensureDatabaseReady(): Promise<string> {
+  const adapter = await getAdapter();
+  if (adapter.providerName === 'Cloud Firestore') {
+    const status = getFirebaseAdminStatus();
+    return status.initialized
+      ? `Cloud Firestore (Admin SDK: ${status.databaseId})`
+      : `Cloud Firestore (REST: ${status.databaseId})`;
+  }
+  return adapter.providerName;
+}
+
 export async function testDatabaseConnection(): Promise<{ ok: boolean; error?: string }> {
   try {
     const adapter = await getAdapter();

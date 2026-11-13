@@ -57,6 +57,7 @@ export default function App() {
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
+  const [lastFailedNewChat, setLastFailedNewChat] = useState<boolean>(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
 
   // Dynamic configured model fetched from backend
@@ -100,6 +101,7 @@ export default function App() {
     setMemoryStatus(null);
     setErrorBanner(null);
     setLastFailedPrompt(null);
+    setLastFailedNewChat(false);
     setInputMessage('');
     setIsSidebarOpen(false);
     setIsSettingsOpen(false);
@@ -271,6 +273,7 @@ export default function App() {
     try {
       setErrorBanner(null);
       setLastFailedPrompt(null);
+      setLastFailedNewChat(false);
       const newConv = await api.createConversation('New Chat');
       setConversations((prev) => [newConv, ...prev]);
       setActiveConversationId(newConv.id);
@@ -278,12 +281,14 @@ export default function App() {
       setInputMessage('');
     } catch (e: any) {
       setErrorBanner(e?.message || 'Failed to create new conversation');
+      setLastFailedNewChat(true);
     }
   };
 
   const handleSelectConversation = (id: string) => {
     setErrorBanner(null);
     setLastFailedPrompt(null);
+    setLastFailedNewChat(false);
     setActiveConversationId(id);
   };
 
@@ -331,6 +336,7 @@ export default function App() {
     isSubmittingRef.current = true;
     setErrorBanner(null);
     setLastFailedPrompt(null);
+    setLastFailedNewChat(false);
     setInputMessage('');
 
     let convId = activeConversationId;
@@ -346,6 +352,7 @@ export default function App() {
         isSubmittingRef.current = false;
         setInputMessage(prompt);
         setErrorBanner(err?.message || 'Failed to create conversation session. Please try again.');
+        setLastFailedPrompt(prompt);
         return;
       }
     }
@@ -687,24 +694,29 @@ export default function App() {
               <span className="leading-relaxed break-words">{errorBanner}</span>
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
-              {lastFailedPrompt && (
+              {(lastFailedPrompt || lastFailedNewChat) && (
                 <button
                   type="button"
                   onClick={() => {
-                    const p = lastFailedPrompt;
-                    setLastFailedPrompt(null);
-                    setErrorBanner(null);
-                    setMessages((prev) => {
-                      if (
-                        prev.length > 0 &&
-                        prev[prev.length - 1].role === 'user' &&
-                        prev[prev.length - 1].content === p
-                      ) {
-                        return prev.slice(0, -1);
-                      }
-                      return prev;
-                    });
-                    handleSendMessage(p);
+                    if (lastFailedPrompt) {
+                      const p = lastFailedPrompt;
+                      setLastFailedPrompt(null);
+                      setLastFailedNewChat(false);
+                      setErrorBanner(null);
+                      setMessages((prev) => {
+                        if (
+                          prev.length > 0 &&
+                          prev[prev.length - 1].role === 'user' &&
+                          prev[prev.length - 1].content === p
+                        ) {
+                          return prev.slice(0, -1);
+                        }
+                        return prev;
+                      });
+                      handleSendMessage(p);
+                    } else if (lastFailedNewChat) {
+                      handleNewChat();
+                    }
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium cursor-pointer transition-colors shadow-xs"
                 >
@@ -717,6 +729,7 @@ export default function App() {
                 onClick={() => {
                   setErrorBanner(null);
                   setLastFailedPrompt(null);
+                  setLastFailedNewChat(false);
                 }}
                 className="text-[var(--nx-text-error-muted)] hover:text-[var(--nx-text-error)] px-2 py-1 rounded cursor-pointer"
               >

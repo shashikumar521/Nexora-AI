@@ -57,46 +57,40 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
 
   return (
     <div className="flex-1 flex flex-col items-center justify-start sm:justify-center w-full max-w-3xl mx-auto px-2.5 sm:px-4 py-4 sm:py-8 select-none min-w-0">
-      {/* Luminous Neural Emblem */}
-      <div className="relative mb-4 sm:mb-6">
-        <div className="absolute inset-0 rounded-full bg-[#6366F1]/20 blur-2xl animate-pulse" />
-        <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E1B4B] border border-[#6366F1]/40 flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.35)]">
-          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-inner">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="w-5 h-5 sm:w-6 sm:h-6 text-white"
-            >
-              <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-2 3.46v2.08a4 4 0 0 0 1 2.65V18a4 4 0 0 0 4 4h2a4 4 0 0 0 4-4v-2.81a4 4 0 0 0 1-2.65V10.46A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z" />
-              <path d="M12 7v5" />
-              <path d="M9 10h6" />
-              <path d="M9 15h6" />
-            </svg>
-          </div>
+      {/* Official Nexora AI Brand Emblem (Logo 1) */}
+      <div className="relative mb-4 sm:mb-5">
+        <div className="absolute -inset-2 rounded-3xl bg-gradient-to-tr from-[#38BDF8]/20 via-[#6366F1]/20 to-[#8B5CF6]/20 blur-2xl animate-pulse" />
+        <div className="relative w-36 sm:w-44 rounded-2xl overflow-hidden bg-[#0B1221] border border-[#38BDF8]/30 shadow-[0_0_32px_rgba(56,189,248,0.24)]">
+          <img
+            src="/brand/nexora-logo-full.png"
+            alt="Nexora AI"
+            className="w-full h-auto block object-contain"
+          />
         </div>
       </div>
 
-      {/* Powered by Pill */}
-      <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3 py-1.5 rounded-2xl sm:rounded-full bg-[#1E293B]/80 border border-[#6366F1]/30 text-[11px] sm:text-xs text-[#CBD5E1] mb-4 sm:mb-5 shadow-sm max-w-full text-center">
-        <span className="flex items-center gap-1 text-[#FBBF24]">
+      {/* Powered by Pill with Assistant Mascot (Logo 2) */}
+      <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3 py-1.5 rounded-2xl sm:rounded-full bg-[var(--nx-bg-surface)] border border-[var(--nx-accent-border)] text-[11px] sm:text-xs text-[var(--nx-text-body)] mb-4 sm:mb-5 shadow-[var(--nx-card-shadow)] max-w-full text-center">
+        <img
+          src="/brand/nexora-assistant-avatar.png"
+          alt="Nexora AI Assistant"
+          className="w-5 h-5 rounded-full object-cover ring-1 ring-[#38BDF8]/40 bg-[#0B1221] shrink-0"
+        />
+        <span className="flex items-center gap-1 text-[var(--nx-status-amber)]">
           <Zap className="w-3.5 h-3.5 fill-current shrink-0" />
-          <span className="font-medium text-[#F8FAFC]">
+          <span className="font-medium text-[var(--nx-text-heading)]">
             Powered by Google {formatModelDisplayName(activeModelName)}
           </span>
         </span>
-        <span className="text-white/20 hidden sm:inline">•</span>
-        <span className="text-[#94A3B8]">Real-time Multi-turn Context</span>
+        <span className="text-[var(--nx-border-strong)] hidden sm:inline">•</span>
+        <span className="text-[var(--nx-text-muted)]">Real-time Multi-turn Context</span>
       </div>
 
       {/* Hero Headings */}
-      <h1 className="font-display font-bold text-xl sm:text-3xl text-white text-center tracking-tight mb-1.5 sm:mb-2 px-1">
+      <h1 className="font-display font-bold text-xl sm:text-3xl text-[var(--nx-text-heading)] text-center tracking-tight mb-1.5 sm:mb-2 px-1">
         What can I help you with today?
       </h1>
-      <p className="text-xs sm:text-sm text-[#94A3B8] text-center mb-5 sm:mb-8 max-w-md px-2">
+      <p className="text-xs sm:text-sm text-[var(--nx-text-body)] text-center mb-5 sm:mb-8 max-w-md px-2">
         Ask anything. Explore ideas. Learn something new.
       </p>
 
@@ -109,16 +103,16 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
               key={idx}
               type="button"
               onClick={() => onSelectPrompt(item.prompt)}
-              className="flex items-start gap-3 sm:gap-3.5 p-3.5 sm:p-4 min-h-[68px] rounded-xl bg-[#111827]/75 hover:bg-[#1F2937]/80 border border-white/5 hover:border-[#6366F1]/40 transition-all text-left group cursor-pointer shadow-sm hover:shadow-md active:scale-[0.99] w-full min-w-0"
+              className="flex items-start gap-3 sm:gap-3.5 p-3.5 sm:p-4 min-h-[68px] rounded-xl bg-[var(--nx-bg-surface-soft)] hover:bg-[var(--nx-bg-surface)] border border-[var(--nx-border-subtle)] hover:border-[var(--nx-accent-border)] shadow-[var(--nx-card-shadow)] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-all text-left group cursor-pointer active:scale-[0.99] w-full min-w-0"
             >
-              <div className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg bg-[#1E293B] group-hover:bg-[#6366F1]/20 border border-white/10 group-hover:border-[#6366F1]/40 flex items-center justify-center shrink-0 transition-colors">
-                <Icon className="w-4 h-4 text-[#818CF8]" />
+              <div className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg bg-[var(--nx-bg-surface-alt)] group-hover:bg-[var(--nx-accent-soft)] border border-[var(--nx-border-subtle)] group-hover:border-[var(--nx-accent-border)] flex items-center justify-center shrink-0 transition-colors">
+                <Icon className="w-4 h-4 text-[var(--nx-accent-icon)]" />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="font-display font-semibold text-sm text-[#F8FAFC] group-hover:text-white transition-colors">
+                <h3 className="font-display font-semibold text-sm text-[var(--nx-text-heading-alt)] group-hover:text-[var(--nx-text-heading)] transition-colors">
                   {item.title}
                 </h3>
-                <p className="text-xs text-[#94A3B8] line-clamp-2 mt-0.5 leading-relaxed break-words">
+                <p className="text-xs text-[var(--nx-text-body)] line-clamp-2 mt-0.5 leading-relaxed break-words">
                   {item.description}
                 </p>
               </div>
@@ -129,7 +123,7 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
 
       {/* Quick Modes */}
       <div className="flex items-center justify-center flex-wrap gap-2 mb-5 sm:mb-6 w-full">
-        <span className="text-xs text-[#64748B] mr-0.5 w-full sm:w-auto text-center">Quick modes:</span>
+        <span className="text-xs text-[var(--nx-text-subtle)] mr-0.5 w-full sm:w-auto text-center">Quick modes:</span>
         {quickModes.map((mode, idx) => {
           const Icon = mode.icon;
           return (
@@ -137,9 +131,9 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
               key={idx}
               type="button"
               onClick={() => onSelectPrompt(mode.prompt)}
-              className="flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[38px] sm:min-h-0 rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/10 hover:border-[#6366F1]/30 text-xs text-[#CBD5E1] hover:text-white transition-all cursor-pointer active:scale-[0.98]"
+              className="flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[38px] sm:min-h-0 rounded-full bg-[var(--nx-bg-surface)] hover:bg-[var(--nx-bg-surface-alt)] border border-[var(--nx-border-subtle)] hover:border-[var(--nx-accent-border)] shadow-xs text-xs text-[var(--nx-text-body)] hover:text-[var(--nx-text-heading)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-all cursor-pointer active:scale-[0.98]"
             >
-              <Icon className="w-3.5 h-3.5 text-[#818CF8] shrink-0" />
+              <Icon className="w-3.5 h-3.5 text-[var(--nx-accent-icon)] shrink-0" />
               <span>{mode.label}</span>
             </button>
           );
@@ -147,15 +141,15 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
       </div>
 
       {/* Active Context Status Banner */}
-      <div className="w-full p-3.5 rounded-xl bg-[#111827]/60 border border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 sm:gap-3 text-xs">
+      <div className="w-full p-3.5 rounded-xl bg-[var(--nx-bg-surface-soft)] border border-[var(--nx-border-subtle)] shadow-[var(--nx-card-shadow)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 sm:gap-3 text-xs">
         <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-          <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0 mt-1 sm:mt-0" />
-          <span className="text-[#CBD5E1] leading-relaxed break-words">
-            <strong className="text-white font-medium">Active Context:</strong> Conversation memory
+          <span className="w-2 h-2 rounded-full bg-[var(--nx-secondary)] animate-pulse shrink-0 mt-1 sm:mt-0" />
+          <span className="text-[var(--nx-text-body)] leading-relaxed break-words">
+            <strong className="text-[var(--nx-text-heading)] font-medium">Active Context:</strong> Conversation memory
             automatically retains up to 20 messages with progressive real-time summarization.
           </span>
         </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1F2937] text-[11px] font-mono text-[#38BDF8] border border-white/5 shrink-0 self-end sm:self-center">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--nx-bg-pill)] text-[11px] font-mono text-[var(--nx-secondary-text)] border border-[var(--nx-secondary-border)] shrink-0 self-end sm:self-center">
           <Cpu className="w-3 h-3" />
           <span>Ready</span>
         </div>

@@ -56,25 +56,30 @@ export default function App() {
   // Current active model to display everywhere
   const activeModel = backendModel || settings.model || 'gemini-3.1-flash-lite';
 
-  // Apply theme to HTML root
+  // Apply theme to HTML root & sync system color scheme changes immediately
   useEffect(() => {
     const root = document.documentElement;
-    const body = document.body;
-    const isDark =
-      settings.theme === 'dark' ||
-      (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 
-    if (isDark) {
-      root.classList.add('dark');
-      root.classList.remove('light');
-      body.style.backgroundColor = '#0B0F19';
-      body.style.color = '#F8FAFC';
-    } else {
-      root.classList.add('light');
-      root.classList.remove('dark');
-      body.style.backgroundColor = '#F8FAFF';
-      body.style.color = '#172033';
-    }
+    const applyTheme = () => {
+      const isDark =
+        settings.theme === 'dark' || (settings.theme === 'system' && mediaQuery.matches);
+
+      if (isDark) {
+        root.classList.add('dark');
+        root.classList.remove('light');
+        themeColorMeta?.setAttribute('content', '#0B0F19');
+      } else {
+        root.classList.add('light');
+        root.classList.remove('dark');
+        themeColorMeta?.setAttribute('content', '#FFFFFF');
+      }
+    };
+
+    applyTheme();
+    mediaQuery.addEventListener('change', applyTheme);
+    return () => mediaQuery.removeEventListener('change', applyTheme);
   }, [settings.theme]);
 
   // Load initial settings and conversations
@@ -528,17 +533,17 @@ export default function App() {
 
         {/* Floating Notification Feedback */}
         {shareFeedback && (
-          <div className="absolute top-16 sm:top-18 right-3 sm:right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1E293B] border border-[#6366F1]/40 text-xs text-white shadow-xl animate-in fade-in slide-in-from-top-2">
-            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div className="absolute top-16 sm:top-18 right-3 sm:right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[var(--nx-bg-toast)] border border-[var(--nx-accent-border)] text-xs text-[var(--nx-text-heading)] shadow-xl animate-in fade-in slide-in-from-top-2">
+            <Check className="w-4 h-4 text-[var(--nx-status-emerald)] shrink-0" />
             <span>{shareFeedback}</span>
           </div>
         )}
 
         {/* Error Notification Banner with Retry */}
         {errorBanner && (
-          <div className="mx-2.5 sm:mx-4 mt-2.5 sm:mt-3 flex items-center justify-between p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-xs text-red-200 shadow-lg gap-2 flex-wrap sm:flex-nowrap shrink-0">
+          <div className="mx-2.5 sm:mx-4 mt-2.5 sm:mt-3 flex items-center justify-between p-3 rounded-xl bg-[var(--nx-bg-error)] border border-[var(--nx-border-error)] text-xs text-[var(--nx-text-error)] shadow-lg gap-2 flex-wrap sm:flex-nowrap shrink-0">
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
               <span className="leading-relaxed break-words">{errorBanner}</span>
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
@@ -573,7 +578,7 @@ export default function App() {
                   setErrorBanner(null);
                   setLastFailedPrompt(null);
                 }}
-                className="text-red-300 hover:text-white px-2 py-1 rounded cursor-pointer"
+                className="text-[var(--nx-text-error-muted)] hover:text-[var(--nx-text-error)] px-2 py-1 rounded cursor-pointer"
               >
                 Dismiss
               </button>
@@ -627,11 +632,15 @@ export default function App() {
                 />
               )}
 
-              {/* Loading spinner if waiting for first token */}
+              {/* Loading spinner if waiting for first token (Logo 2 Assistant Avatar) */}
               {isLoading && !streamingMessage && (
-                <div className="flex items-center gap-3 p-4 text-xs text-[#94A3B8]">
-                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#6366F1] to-[#8B5CF6] flex items-center justify-center animate-pulse shrink-0">
-                    <span className="w-2 h-2 rounded-full bg-white" />
+                <div className="flex items-center gap-3 p-4 text-xs text-[var(--nx-text-muted)]">
+                  <div className="w-8 h-8 rounded-full overflow-hidden bg-[#0B1221] ring-2 ring-[#38BDF8]/50 shadow-[0_0_16px_rgba(56,189,248,0.3)] animate-pulse shrink-0">
+                    <img
+                      src="/brand/nexora-assistant-avatar.png"
+                      alt="Nexora AI is thinking"
+                      className="w-full h-full object-cover block"
+                    />
                   </div>
                   <span>Nexora AI is thinking with {formatModelDisplayName(activeModel)}...</span>
                 </div>
@@ -700,29 +709,38 @@ export default function App() {
 
       {/* Help & Feedback Modal */}
       {isHelpOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-[#0F172A] border border-white/10 rounded-2xl p-5 sm:p-6 shadow-2xl text-sm">
-            <h3 className="font-display font-semibold text-lg text-white mb-2">Help & Feedback</h3>
-            <p className="text-xs text-[#94A3B8] mb-4 leading-relaxed">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-[var(--nx-bg-overlay)] backdrop-blur-xs">
+          <div className="w-full max-w-md bg-[var(--nx-bg-modal-alt)] border border-[var(--nx-border-subtle)] rounded-2xl p-5 sm:p-6 shadow-2xl text-sm">
+            <div className="flex items-center gap-2.5 mb-2">
+              <div className="w-7 h-7 rounded-lg bg-[#0B1221] overflow-hidden border border-[#38BDF8]/30 shrink-0">
+                <img
+                  src="/brand/nexora-logo-icon.png"
+                  alt="Nexora AI"
+                  className="w-full h-full object-cover block"
+                />
+              </div>
+              <h3 className="font-display font-semibold text-lg text-[var(--nx-text-heading)]">Help & Feedback</h3>
+            </div>
+            <p className="text-xs text-[var(--nx-text-muted)] mb-4 leading-relaxed">
               Nexora AI is designed with persistent conversation memory, progressive running summaries, and state-of-the-art Google Gemini intelligence.
             </p>
-            <div className="space-y-2 text-xs text-[#CBD5E1] bg-[#111827] p-3 rounded-xl border border-white/5 mb-4">
+            <div className="space-y-2 text-xs text-[var(--nx-text-body)] bg-[var(--nx-bg-surface)] p-3 rounded-xl border border-[var(--nx-border-subtle)] mb-4">
               <div className="flex justify-between gap-2 flex-wrap">
-                <span className="text-[#64748B]">Context Strategy</span>
-                <span className="font-mono text-[#818CF8]">Last 20 msgs + Running Summary</span>
+                <span className="text-[var(--nx-text-subtle)]">Context Strategy</span>
+                <span className="font-mono text-[var(--nx-accent-text)]">Last 20 msgs + Running Summary</span>
               </div>
               <div className="flex justify-between gap-2 flex-wrap">
-                <span className="text-[#64748B]">Configured AI Model</span>
-                <span className="font-mono text-white">{formatModelDisplayName(activeModel)}</span>
+                <span className="text-[var(--nx-text-subtle)]">Configured AI Model</span>
+                <span className="font-mono text-[var(--nx-text-heading)]">{formatModelDisplayName(activeModel)}</span>
               </div>
               <div className="flex justify-between gap-2 flex-wrap">
-                <span className="text-[#64748B]">Persistent DB</span>
-                <span className="font-mono text-emerald-400">PostgreSQL</span>
+                <span className="text-[var(--nx-text-subtle)]">Persistent DB</span>
+                <span className="font-mono text-[var(--nx-status-emerald)]">PostgreSQL</span>
               </div>
             </div>
             <button
               onClick={() => setIsHelpOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white text-xs font-medium cursor-pointer"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[var(--nx-accent)] to-[var(--nx-accent-end)] hover:opacity-90 text-white text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] cursor-pointer"
             >
               Got it
             </button>

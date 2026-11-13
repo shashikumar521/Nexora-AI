@@ -25,7 +25,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const blocks = useMemo(() => parseBlocks(content), [content]);
 
   return (
-    <div className="space-y-3.5 text-sm leading-relaxed text-[#F1F5F9] select-text max-w-full overflow-hidden break-words">
+    <div className="space-y-3.5 text-sm leading-relaxed text-[var(--nx-text-primary)] select-text max-w-full overflow-hidden break-words">
       {blocks.map((block, idx) => {
         switch (block.type) {
           case 'code':
@@ -42,19 +42,19 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             return (
               <div
                 key={idx}
-                className="p-4 rounded-xl bg-gradient-to-r from-[#1E293B]/90 to-[#0F172A]/90 border border-[#6366F1]/30 my-3 shadow-[0_4px_20px_rgba(0,0,0,0.2)] max-w-full overflow-hidden"
+                className="p-4 rounded-xl [background:var(--nx-callout-bg)] border border-[var(--nx-accent-border)] my-3 shadow-[var(--nx-card-shadow)] max-w-full overflow-hidden"
               >
                 <div className="flex items-start gap-3">
-                  <div className="w-7 h-7 rounded-lg bg-[#6366F1]/20 border border-[#6366F1]/40 flex items-center justify-center shrink-0 mt-0.5">
-                    <span className="text-[#A5B4FC] text-sm">💡</span>
+                  <div className="w-7 h-7 rounded-lg bg-[var(--nx-accent-soft)] border border-[var(--nx-accent-border)] flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="text-[var(--nx-accent-text)] text-sm">💡</span>
                   </div>
                   <div className="min-w-0 flex-1">
                     {block.title && (
-                      <h4 className="font-display font-semibold text-[#F8FAFC] text-sm mb-1 tracking-tight">
+                      <h4 className="font-display font-semibold text-[var(--nx-text-heading-alt)] text-sm mb-1 tracking-tight">
                         {renderInline(block.title)}
                       </h4>
                     )}
-                    <div className="text-xs text-[#CBD5E1] leading-relaxed break-words">
+                    <div className="text-xs text-[var(--nx-text-body)] leading-relaxed break-words">
                       {renderInline(block.content)}
                     </div>
                   </div>
@@ -69,8 +69,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             return (
               <ul key={idx} className="space-y-1.5 my-2.5 pl-2 max-w-full">
                 {block.items?.map((item, itemIdx) => (
-                  <li key={itemIdx} className="flex items-start gap-2.5 text-[#E2E8F0]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#6366F1] mt-2 shrink-0" />
+                  <li key={itemIdx} className="flex items-start gap-2.5 text-[var(--nx-text-primary)]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--nx-accent)] mt-2 shrink-0" />
                     <span className="flex-1 min-w-0 leading-relaxed break-words">
                       {renderInline(item)}
                     </span>
@@ -82,8 +82,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             return (
               <ol key={idx} className="space-y-1.5 my-2.5 pl-2 max-w-full">
                 {block.items?.map((item, itemIdx) => (
-                  <li key={itemIdx} className="flex items-start gap-2.5 text-[#E2E8F0]">
-                    <span className="text-[11px] font-mono font-bold text-[#818CF8] bg-[#6366F1]/15 px-1.5 py-0.5 rounded border border-[#6366F1]/25 shrink-0 mt-0.5">
+                  <li key={itemIdx} className="flex items-start gap-2.5 text-[var(--nx-text-primary)]">
+                    <span className="text-[11px] font-mono font-bold text-[var(--nx-accent-text)] bg-[var(--nx-accent-soft)] px-1.5 py-0.5 rounded border border-[var(--nx-accent-border)] shrink-0 mt-0.5">
                       {itemIdx + 1}
                     </span>
                     <span className="flex-1 min-w-0 leading-relaxed break-words">
@@ -94,10 +94,10 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               </ol>
             );
           case 'hr':
-            return <hr key={idx} className="border-t border-white/10 my-4" />;
+            return <hr key={idx} className="border-t border-[var(--nx-border-subtle)] my-4" />;
           default:
             return (
-              <p key={idx} className="text-[#CBD5E1] leading-relaxed break-words my-2">
+              <p key={idx} className="text-[var(--nx-text-body)] leading-relaxed break-words my-2">
                 {renderInline(block.content)}
               </p>
             );
@@ -407,26 +407,26 @@ const HeadingBlock: React.FC<{ level: number; text: string }> = ({ level, text }
   switch (level) {
     case 1:
       return (
-        <h1 className="font-display font-bold text-xl sm:text-2xl text-[#F8FAFC] tracking-tight mt-5 mb-2.5 pb-2 border-b border-white/10 break-words">
+        <h1 className="font-display font-bold text-xl sm:text-2xl text-[var(--nx-text-heading-alt)] tracking-tight mt-5 mb-2.5 pb-2 border-b border-[var(--nx-border-subtle)] break-words">
           {rendered}
         </h1>
       );
     case 2:
       return (
-        <h2 className="font-display font-semibold text-lg sm:text-xl text-[#F8FAFC] tracking-tight mt-4 mb-2 text-indigo-200 break-words">
+        <h2 className="font-display font-semibold text-lg sm:text-xl text-[var(--nx-text-heading-h2)] tracking-tight mt-4 mb-2 break-words">
           {rendered}
         </h2>
       );
     case 3:
       return (
-        <h3 className="font-display font-semibold text-base sm:text-lg text-[#E2E8F0] tracking-tight mt-3 mb-1.5 break-words">
+        <h3 className="font-display font-semibold text-base sm:text-lg text-[var(--nx-text-primary)] tracking-tight mt-3 mb-1.5 break-words">
           {rendered}
         </h3>
       );
     case 4:
     default:
       return (
-        <h4 className="font-display font-semibold text-sm sm:text-base text-[#CBD5E1] tracking-tight mt-2.5 mb-1 break-words">
+        <h4 className="font-display font-semibold text-sm sm:text-base text-[var(--nx-text-body)] tracking-tight mt-2.5 mb-1 break-words">
           {rendered}
         </h4>
       );
@@ -540,9 +540,9 @@ const TableBlock: React.FC<{ rows: string[][] }> = ({ rows }) => {
   const [header, ...body] = rows;
 
   return (
-    <div className="overflow-x-auto my-3 rounded-xl border border-white/10 bg-[#0F172A]/50 max-w-full">
-      <table className="w-full text-left text-xs text-[#CBD5E1] border-collapse min-w-[340px]">
-        <thead className="bg-[#1E293B] text-[#F8FAFC] font-semibold border-b border-white/10">
+    <div className="overflow-x-auto my-3 rounded-xl border border-[var(--nx-border-subtle)] [background:var(--nx-table-bg)] shadow-xs max-w-full">
+      <table className="w-full text-left text-xs text-[var(--nx-text-body)] border-collapse min-w-[340px]">
+        <thead className="bg-[var(--nx-table-head-bg)] text-[var(--nx-text-heading-alt)] font-semibold border-b border-[var(--nx-border-subtle)]">
           <tr>
             {header.map((col, i) => (
               <th key={i} className="px-3.5 py-2.5 font-medium">
@@ -551,9 +551,9 @@ const TableBlock: React.FC<{ rows: string[][] }> = ({ rows }) => {
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/5">
+        <tbody className="divide-y divide-[var(--nx-border-faint)]">
           {body.map((row, rIdx) => (
-            <tr key={rIdx} className="hover:bg-white/[0.03] transition-colors">
+            <tr key={rIdx} className="hover:[background:var(--nx-table-row-hover)] transition-colors">
               {row.map((cell, cIdx) => (
                 <td key={cIdx} className="px-3.5 py-2.5 align-top">
                   {renderInline(cell)}
@@ -603,7 +603,7 @@ export function renderInline(text: string): React.ReactNode[] {
             href={linkMatch[2]}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[#818CF8] hover:text-[#A5B4FC] underline underline-offset-2 break-all"
+            className="text-[var(--nx-accent-text)] hover:text-[var(--nx-accent)] underline underline-offset-2 break-all"
           >
             {linkMatch[1]}
           </a>
@@ -615,7 +615,7 @@ export function renderInline(text: string): React.ReactNode[] {
     // Bold + Italic: ***text*** or ___text___
     else if ((token.startsWith('***') && token.endsWith('***')) || (token.startsWith('___') && token.endsWith('___'))) {
       parts.push(
-        <strong key={key} className="font-semibold italic text-white">
+        <strong key={key} className="font-semibold italic text-[var(--nx-text-heading)]">
           {token.slice(3, -3)}
         </strong>
       );
@@ -623,7 +623,7 @@ export function renderInline(text: string): React.ReactNode[] {
     // Bold: **text** or __text__
     else if ((token.startsWith('**') && token.endsWith('**')) || (token.startsWith('__') && token.endsWith('__'))) {
       parts.push(
-        <strong key={key} className="font-semibold text-white">
+        <strong key={key} className="font-semibold text-[var(--nx-text-heading)]">
           {token.slice(2, -2)}
         </strong>
       );
@@ -631,7 +631,7 @@ export function renderInline(text: string): React.ReactNode[] {
     // Strikethrough: ~~text~~
     else if (token.startsWith('~~') && token.endsWith('~~')) {
       parts.push(
-        <del key={key} className="line-through text-[#94A3B8]">
+        <del key={key} className="line-through text-[var(--nx-text-muted)]">
           {token.slice(2, -2)}
         </del>
       );
@@ -641,7 +641,7 @@ export function renderInline(text: string): React.ReactNode[] {
       parts.push(
         <code
           key={key}
-          className="font-mono text-[12px] px-1.5 py-0.5 rounded-md bg-[#1F2937] text-[#38BDF8] border border-white/10 mx-0.5 break-all"
+          className="font-mono text-[12px] px-1.5 py-0.5 rounded-md bg-[var(--nx-code-inline-bg)] text-[var(--nx-code-inline-text)] border border-[var(--nx-code-inline-border)] mx-0.5 break-all"
         >
           {token.slice(1, -1)}
         </code>
@@ -650,7 +650,7 @@ export function renderInline(text: string): React.ReactNode[] {
     // Italic: *text* or _text_
     else if ((token.startsWith('*') && token.endsWith('*')) || (token.startsWith('_') && token.endsWith('_'))) {
       parts.push(
-        <em key={key} className="italic text-[#E2E8F0]">
+        <em key={key} className="italic text-[var(--nx-text-primary)]">
           {token.slice(1, -1)}
         </em>
       );

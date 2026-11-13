@@ -49,7 +49,7 @@ function getPool(): Pool {
     connectionString,
     max: 5,
     idleTimeoutMillis: 20000,
-    connectionTimeoutMillis: 10000,
+    connectionTimeoutMillis: process.env.VERCEL ? 10000 : 3000,
     query_timeout: 15000,
     ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
   };

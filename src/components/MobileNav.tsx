@@ -19,7 +19,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   return (
     <nav
       aria-label="Mobile navigation"
-      className="sm:hidden fixed bottom-0 left-0 right-0 bg-[#0B0F19]/95 backdrop-blur-xl border-t border-white/10 z-50 pb-[env(safe-area-inset-bottom)] select-none"
+      className="sm:hidden fixed bottom-0 left-0 right-0 bg-[var(--nx-bg-header)] backdrop-blur-xl border-t border-[var(--nx-border-subtle)] z-50 pb-[env(safe-area-inset-bottom)] select-none"
     >
       <div className="h-14 flex items-center justify-around px-2">
         <button
@@ -27,8 +27,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({
           onClick={onSelectChat}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[60px] min-h-[44px] px-3 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
             activeView === 'chat'
-              ? 'text-[#818CF8] font-semibold bg-[#6366F1]/10'
-              : 'text-[#94A3B8] hover:text-white'
+              ? 'text-[var(--nx-accent-text)] font-semibold bg-[var(--nx-accent-soft)]'
+              : 'text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)]'
           }`}
         >
           <MessageSquare className="w-4 h-4" />
@@ -40,8 +40,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({
           onClick={onOpenSearch}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[60px] min-h-[44px] px-3 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
             activeView === 'search'
-              ? 'text-[#818CF8] font-semibold bg-[#6366F1]/10'
-              : 'text-[#94A3B8] hover:text-white'
+              ? 'text-[var(--nx-accent-text)] font-semibold bg-[var(--nx-accent-soft)]'
+              : 'text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)]'
           }`}
         >
           <Search className="w-4 h-4" />
@@ -53,8 +53,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({
           onClick={onOpenHistory}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[60px] min-h-[44px] px-3 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
             activeView === 'history'
-              ? 'text-[#818CF8] font-semibold bg-[#6366F1]/10'
-              : 'text-[#94A3B8] hover:text-white'
+              ? 'text-[var(--nx-accent-text)] font-semibold bg-[var(--nx-accent-soft)]'
+              : 'text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)]'
           }`}
         >
           <History className="w-4 h-4" />
@@ -66,8 +66,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({
           onClick={onOpenSettings}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[60px] min-h-[44px] px-3 py-1 rounded-xl text-[11px] transition-colors cursor-pointer ${
             activeView === 'settings'
-              ? 'text-[#818CF8] font-semibold bg-[#6366F1]/10'
-              : 'text-[#94A3B8] hover:text-white'
+              ? 'text-[var(--nx-accent-text)] font-semibold bg-[var(--nx-accent-soft)]'
+              : 'text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)]'
           }`}
         >
           <Settings className="w-4 h-4" />

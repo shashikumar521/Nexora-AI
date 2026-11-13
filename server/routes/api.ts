@@ -141,8 +141,8 @@ function getDbErrorStatus(err: unknown): number {
  */
 apiRouter.get('/health', async (req: Request, res: Response) => {
   const hasKey = isGeminiApiKeyConfigured();
-  const provider = getDatabaseProviderName();
   const dbCheck = await testDatabaseConnection();
+  const provider = getDatabaseProviderName();
   const verifyGemini = req.query.verify === 'gemini';
   const geminiVerification = verifyGemini ? await verifyGeminiAccess() : undefined;
 

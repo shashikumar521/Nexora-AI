@@ -1,13 +1,154 @@
 @import "tailwindcss";
 
-:root {
+:root,
+html.dark {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Plus Jakarta Sans', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+
+  /* Dark Theme Tokens (Preserved Exactly) */
+  --nx-bg-canvas: #0B0F19;
+  --nx-bg-header: rgba(11, 15, 25, 0.85);
+  --nx-bg-sidebar: #0E1524;
+  --nx-bg-surface: #111827;
+  --nx-bg-surface-alt: #1E293B;
+  --nx-bg-surface-soft: rgba(17, 24, 39, 0.75);
+  --nx-bg-surface-hover: #1F2937;
+  --nx-bg-active-item: #1F2937;
+  --nx-bg-pill: #111827;
+  --nx-bg-input: rgba(17, 24, 39, 0.95);
+  --nx-bg-user-bubble: #1F2937;
+  --nx-bg-modal: #0B0F19;
+  --nx-bg-modal-alt: #0F172A;
+  --nx-bg-modal-header: #111827;
+  --nx-bg-toast: #1E293B;
+  --nx-bg-overlay: rgba(0, 0, 0, 0.75);
+
+  --nx-text-heading: #FFFFFF;
+  --nx-text-heading-alt: #F8FAFC;
+  --nx-text-heading-h2: #C7D2FE;
+  --nx-text-primary: #F1F5F9;
+  --nx-text-body: #CBD5E1;
+  --nx-text-muted: #94A3B8;
+  --nx-text-subtle: #64748B;
+
+  --nx-border-subtle: rgba(255, 255, 255, 0.08);
+  --nx-border-faint: rgba(255, 255, 255, 0.05);
+  --nx-border-strong: rgba(255, 255, 255, 0.14);
+  --nx-hover-ghost: rgba(255, 255, 255, 0.06);
+
+  --nx-accent: #6366F1;
+  --nx-accent-end: #8B5CF6;
+  --nx-accent-text: #A5B4FC;
+  --nx-accent-icon: #818CF8;
+  --nx-accent-soft: rgba(99, 102, 241, 0.16);
+  --nx-accent-border: rgba(99, 102, 241, 0.35);
+
+  --nx-secondary: #38BDF8;
+  --nx-secondary-text: #38BDF8;
+  --nx-secondary-soft: rgba(56, 189, 248, 0.12);
+  --nx-secondary-border: rgba(56, 189, 248, 0.25);
+
+  --nx-status-emerald: #34D399;
+  --nx-status-amber: #FBBF24;
+
+  --nx-bg-error: rgba(69, 10, 10, 0.65);
+  --nx-border-error: rgba(239, 68, 68, 0.4);
+  --nx-text-error: #FECACA;
+  --nx-text-error-muted: rgba(254, 202, 202, 0.78);
+
+  --nx-card-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  --nx-composer-shadow: 0 10px 35px rgba(0, 0, 0, 0.4);
+  --nx-toggle-off: #1F2937;
+  --nx-kbd-bg: rgba(255, 255, 255, 0.1);
+  --nx-kbd-text: #94A3B8;
+
+  --nx-code-inline-bg: #1F2937;
+  --nx-code-inline-text: #38BDF8;
+  --nx-code-inline-border: rgba(255, 255, 255, 0.1);
+
+  --nx-callout-bg: linear-gradient(to right, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.9));
+  --nx-table-bg: rgba(15, 23, 42, 0.5);
+  --nx-table-head-bg: #1E293B;
+  --nx-table-row-hover: rgba(255, 255, 255, 0.03);
+  --nx-scrollbar-thumb: rgba(148, 163, 184, 0.22);
+  --nx-scrollbar-hover: rgba(148, 163, 184, 0.42);
+}
+
+html.light {
+  /* Light Theme Tokens */
+  --nx-bg-canvas: #F8FAFC;
+  --nx-bg-header: rgba(255, 255, 255, 0.92);
+  --nx-bg-sidebar: #FFFFFF;
+  --nx-bg-surface: #FFFFFF;
+  --nx-bg-surface-alt: #F1F5F9;
+  --nx-bg-surface-soft: #FFFFFF;
+  --nx-bg-surface-hover: #E2E8F0;
+  --nx-bg-active-item: #EEF2FF;
+  --nx-bg-pill: #F1F5F9;
+  --nx-bg-input: #FFFFFF;
+  --nx-bg-user-bubble: #1E293B;
+  --nx-bg-modal: #FFFFFF;
+  --nx-bg-modal-alt: #FFFFFF;
+  --nx-bg-modal-header: #F8FAFC;
+  --nx-bg-toast: #FFFFFF;
+  --nx-bg-overlay: rgba(15, 23, 42, 0.45);
+
+  --nx-text-heading: #111827;
+  --nx-text-heading-alt: #111827;
+  --nx-text-heading-h2: #1E293B;
+  --nx-text-primary: #1E293B;
+  --nx-text-body: #475569;
+  --nx-text-muted: #64748B;
+  --nx-text-subtle: #64748B;
+
+  --nx-border-subtle: #E2E8F0;
+  --nx-border-faint: #E2E8F0;
+  --nx-border-strong: #CBD5E1;
+  --nx-hover-ghost: rgba(15, 23, 42, 0.06);
+
+  --nx-accent: #7657F6;
+  --nx-accent-end: #5B3DF5;
+  --nx-accent-text: #5B3DF5;
+  --nx-accent-icon: #7657F6;
+  --nx-accent-soft: rgba(118, 87, 246, 0.11);
+  --nx-accent-border: rgba(118, 87, 246, 0.32);
+
+  --nx-secondary: #06B6D4;
+  --nx-secondary-text: #0E7490;
+  --nx-secondary-soft: rgba(6, 182, 212, 0.10);
+  --nx-secondary-border: rgba(6, 182, 212, 0.30);
+
+  --nx-status-emerald: #059669;
+  --nx-status-amber: #D97706;
+
+  --nx-bg-error: #FEF2F2;
+  --nx-border-error: #FECACA;
+  --nx-text-error: #991B1B;
+  --nx-text-error-muted: #B91C1C;
+
+  --nx-card-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --nx-composer-shadow: 0 10px 30px -6px rgba(15, 23, 42, 0.10), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --nx-toggle-off: #CBD5E1;
+  --nx-kbd-bg: #F1F5F9;
+  --nx-kbd-text: #475569;
+
+  --nx-code-inline-bg: #EEF2FF;
+  --nx-code-inline-text: #4338CA;
+  --nx-code-inline-border: #C7D2FE;
+
+  --nx-callout-bg: linear-gradient(to right, #F8FAFC, #EEF2FF);
+  --nx-table-bg: #FFFFFF;
+  --nx-table-head-bg: #F1F5F9;
+  --nx-table-row-hover: #F8FAFC;
+  --nx-scrollbar-thumb: rgba(100, 116, 139, 0.25);
+  --nx-scrollbar-hover: rgba(100, 116, 139, 0.45);
 }
 
 body {
   font-family: var(--font-sans);
+  background-color: var(--nx-bg-canvas);
+  color: var(--nx-text-primary);
 }
 
 .font-display {
@@ -27,11 +168,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: var(--nx-scrollbar-thumb);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: var(--nx-scrollbar-hover);
 }
 
 /* Prism syntax highlighting for code blocks */
@@ -99,5 +240,3 @@ body {
 .token.italic {
   font-style: italic;
 }
-
-

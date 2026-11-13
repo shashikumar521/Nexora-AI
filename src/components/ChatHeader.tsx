@@ -45,13 +45,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   const activeTokens = memoryStatus?.activeContextTokens || 0;
 
   return (
-    <header className="h-14 sm:h-16 px-2.5 sm:px-4 bg-[#0B0F19]/85 backdrop-blur-xl border-b border-white/5 flex items-center justify-between gap-1.5 sm:gap-2 select-none z-30 shrink-0 min-w-0">
+    <header className="h-14 sm:h-16 px-2.5 sm:px-4 bg-[var(--nx-bg-header)] backdrop-blur-xl border-b border-[var(--nx-border-subtle)] flex items-center justify-between gap-1.5 sm:gap-2 select-none z-30 shrink-0 min-w-0 transition-colors">
       {/* Left: Hamburger & Compact Logo */}
       <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 min-w-0">
         <button
           type="button"
           onClick={onToggleSidebar}
-          className="w-9 h-9 flex items-center justify-center rounded-xl text-[#94A3B8] hover:text-white hover:bg-white/5 transition-colors cursor-pointer shrink-0"
+          className="w-9 h-9 flex items-center justify-center rounded-xl text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)] hover:bg-[var(--nx-hover-ghost)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-colors cursor-pointer shrink-0"
           title="Toggle sidebar"
           aria-label="Toggle sidebar"
         >
@@ -69,31 +69,31 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           type="button"
           onClick={onOpenSettings}
-          className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 min-h-[34px] rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/10 text-[11px] sm:text-xs text-[#E2E8F0] transition-colors shrink-0 cursor-pointer max-w-[130px] sm:max-w-none"
+          className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 min-h-[34px] rounded-full bg-[var(--nx-bg-pill)] hover:bg-[var(--nx-bg-surface-hover)] border border-[var(--nx-border-subtle)] text-[11px] sm:text-xs text-[var(--nx-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-colors shrink-0 cursor-pointer max-w-[130px] sm:max-w-none"
           title="Click to view AI Model configuration"
         >
-          <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#818CF8] shrink-0" />
+          <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[var(--nx-accent-icon)] shrink-0" />
           <span className="font-medium font-sans truncate">
             {formatModelDisplayName(activeModelName)}
           </span>
-          <ChevronDown className="w-3 h-3 text-[#64748B] shrink-0 hidden sm:inline" />
+          <ChevronDown className="w-3 h-3 text-[var(--nx-text-subtle)] shrink-0 hidden sm:inline" />
         </button>
 
         {/* Conversation Memory Status Badge */}
         <button
           type="button"
           onClick={onOpenMemoryModal}
-          className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 min-h-[34px] rounded-full bg-[#111827] hover:bg-[#1E293B] border border-[#6366F1]/30 hover:border-[#6366F1]/60 text-[11px] sm:text-xs transition-all shrink-0 cursor-pointer group"
+          className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 min-h-[34px] rounded-full bg-[var(--nx-bg-pill)] hover:bg-[var(--nx-bg-surface-hover)] border border-[var(--nx-accent-border)] hover:border-[var(--nx-accent)] text-[11px] sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-all shrink-0 cursor-pointer group"
           title="Click to inspect Conversation Memory & Running Summary"
         >
           <span className="relative flex h-2 w-2 shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
           </span>
-          <span className="text-[#CBD5E1] hidden md:inline font-sans">
+          <span className="text-[var(--nx-text-body)] hidden md:inline font-sans">
             Conversation Memory Active
           </span>
-          <span className="font-mono text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-md bg-[#6366F1]/20 text-[#A5B4FC] border border-[#6366F1]/30">
+          <span className="font-mono text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-md bg-[var(--nx-accent-soft)] text-[var(--nx-accent-text)] border border-[var(--nx-accent-border)]">
             {hasSummary ? (
               <>
                 <span className="sm:hidden">{recentMsgs}+sum</span>
@@ -109,8 +109,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </button>
 
         {/* Token capacity pill */}
-        <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#111827]/60 border border-white/5 text-[11px] font-mono text-[#94A3B8] shrink-0">
-          <Cpu className="w-3 h-3 text-[#38BDF8]" />
+        <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--nx-bg-pill)] border border-[var(--nx-border-subtle)] text-[11px] font-mono text-[var(--nx-text-body)] shrink-0">
+          <Cpu className="w-3 h-3 text-[var(--nx-secondary-text)]" />
           <span>{activeTokens.toLocaleString()} / 1M tk</span>
         </div>
       </div>
@@ -120,7 +120,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           type="button"
           onClick={onShare}
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-[#94A3B8] hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)] hover:bg-[var(--nx-hover-ghost)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-colors cursor-pointer"
           title="Share conversation"
         >
           <Share2 className="w-4 h-4" />
@@ -130,7 +130,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           type="button"
           onClick={onResetContext}
-          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-lg text-[#94A3B8] hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+          className="hidden sm:flex w-9 h-9 items-center justify-center rounded-lg text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)] hover:bg-[var(--nx-hover-ghost)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-colors cursor-pointer"
           title="Reset / refresh context memory"
         >
           <RotateCcw className="w-4 h-4" />
@@ -139,7 +139,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           type="button"
           onClick={onClearContext}
-          className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-[#94A3B8] hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+          className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-[var(--nx-text-muted)] hover:text-red-500 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors cursor-pointer"
           title="Clear all messages in active chat"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -150,14 +150,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <button
           type="button"
           onClick={onToggleTheme}
-          className="w-9 h-9 flex items-center justify-center rounded-lg text-[#94A3B8] hover:text-amber-300 hover:bg-white/5 transition-colors cursor-pointer"
+          className="w-9 h-9 flex items-center justify-center rounded-lg text-[var(--nx-text-muted)] hover:text-[var(--nx-text-heading)] hover:bg-[var(--nx-hover-ghost)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--nx-accent)] transition-colors cursor-pointer"
           title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
           aria-label={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
         >
           {theme === 'dark' ? (
             <Sun className="w-4 h-4 text-amber-400" />
           ) : (
-            <Moon className="w-4 h-4 text-indigo-400" />
+            <Moon className="w-4 h-4 text-[var(--nx-accent-text)]" />
           )}
         </button>
       </div>

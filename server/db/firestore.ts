@@ -1,6 +1,10 @@
-import { initializeApp as initializeAdminApp, getApps as getAdminApps, cert, type App as AdminApp } from 'firebase-admin/app';
-import { getFirestore as getAdminFirestore, type Firestore as AdminFirestore } from 'firebase-admin/firestore';
-import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
+import {
+  getFirebaseAdminFirestore,
+  getFirebaseAdminStatus,
+  getFirebaseDatabaseId,
+  getFirebaseProjectId,
+  isFirebaseServiceAccountConfigured,
+} from '../lib/firebaseAdmin.ts';
 import {
   type AuthContext,
   type DBConversation,
@@ -11,52 +15,10 @@ import {
   nextIsoTimestamp,
 } from './types.ts';
 
-function getProjectId(): string {
-  return (process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || '').trim();
-}
-
-function getDatabaseId(): string {
-  return (process.env.FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || '(default)').trim();
-}
-
 function getDocumentsBaseUrl(): string {
-  const projectId = encodeURIComponent(getProjectId());
-  const databaseId = encodeURIComponent(getDatabaseId());
+  const projectId = encodeURIComponent(getFirebaseProjectId());
+  const databaseId = encodeURIComponent(getFirebaseDatabaseId());
   return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
-}
-
-let cachedAdminFirestore: AdminFirestore | null | undefined;
-
-function getOptionalAdminFirestore(): AdminFirestore | null {
-  if (cachedAdminFirestore !== undefined) {
-    return cachedAdminFirestore;
-  }
-
-  const rawJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
-  if (!rawJson) {
-    cachedAdminFirestore = null;
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawJson);
-    const existing = getAdminApps().find((a) => a.name === 'nexora-admin');
-    const app: AdminApp =
-      existing ||
-      initializeAdminApp(
-        {
-          credential: cert(parsed),
-          projectId: parsed.project_id || getProjectId(),
-        },
-        'nexora-admin'
-      );
-    cachedAdminFirestore = getAdminFirestore(app, getDatabaseId());
-    return cachedAdminFirestore;
-  } catch (err) {
-    console.warn('[Firestore] Failed to initialize Admin Firestore:', err instanceof Error ? err.message : err);
-    cachedAdminFirestore = null;
-    return null;
-  }
 }
 
 type FirestoreValue =
@@ -195,6 +157,15 @@ async function firestoreRestFetch<T>(
   return (await res.json()) as T;
 }
 
+function sanitizeFirestoreErrorText(text: string): string {
+  return text
+    .replace(/-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
+    .replace(/"private_key"\s*:\s*"[^"]*"/gi, '"private_key":"[REDACTED]"')
+    .replace(/Bearer\s+[A-Za-z0-9\-_.]+/gi, 'Bearer [REDACTED]')
+    .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_KEY]')
+    .trim();
+}
+
 function normalizeDbError(action: string, error: unknown): Error {
   if (error instanceof OwnershipForbiddenError) {
     return error;
@@ -203,10 +174,75 @@ function normalizeDbError(action: string, error: unknown): Error {
     if (error.status === 403 || error.firestoreStatus === 'PERMISSION_DENIED') {
       return new OwnershipForbiddenError('You do not have permission to access this resource.');
     }
+    if (error.status === 404 && error.message.toLowerCase().includes('database')) {
+      return new Error(
+        `Database connection failed while ${action}: Firestore database "${getFirebaseDatabaseId()}" was not found. Verify FIREBASE_DATABASE_ID.`,
+        { cause: error }
+      );
+    }
   }
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`[Firestore] ${action} failed:`, message);
-  return new Error(`Database operation failed while ${action}.`, { cause: error });
+
+  const errObj = error as { code?: string | number; message?: string };
+  const code = errObj?.code !== undefined ? String(errObj.code) : '';
+  const rawMessage = errObj?.message || String(error);
+  const safeMessage = sanitizeFirestoreErrorText(rawMessage).slice(0, 300);
+  const status = getFirebaseAdminStatus();
+  const mode = status.initialized ? 'admin' : 'rest';
+  const dbId = getFirebaseDatabaseId();
+
+  console.error(
+    `[Firestore] ${action} failed (mode=${mode}, database=${dbId}, code=${code || 'ERR'}):`,
+    safeMessage
+  );
+
+  const lower = safeMessage.toLowerCase();
+
+  if (
+    safeMessage.includes('FIREBASE_SERVICE_ACCOUNT_JSON') ||
+    safeMessage.includes('Firebase Admin SDK') ||
+    code === '16' ||
+    code === 'UNAUTHENTICATED'
+  ) {
+    return new Error(
+      `Database connection failed while ${action}: ${safeMessage || 'Firebase Admin authentication error.'}`,
+      { cause: error }
+    );
+  }
+
+  if (code === '5' || code === 'NOT_FOUND' || (lower.includes('database') && lower.includes('not found'))) {
+    return new Error(
+      `Database connection failed while ${action}: Cloud Firestore database "${dbId}" was not found or is not initialized.`,
+      { cause: error }
+    );
+  }
+
+  if (
+    code === '14' ||
+    code === 'UNAVAILABLE' ||
+    code === '4' ||
+    code === 'DEADLINE_EXCEEDED' ||
+    lower.includes('timeout') ||
+    lower.includes('unavailable') ||
+    lower.includes('econn') ||
+    lower.includes('enotfound')
+  ) {
+    return new Error(
+      `Database connection failed while ${action} (${code || 'UNAVAILABLE'}). Cloud Firestore is temporarily unreachable.`,
+      { cause: error }
+    );
+  }
+
+  if (code === '7' || code === 'PERMISSION_DENIED') {
+    return new Error(
+      `Firestore permission denied while ${action}. Verify service account IAM roles (Cloud Datastore User / Firebase Admin).`,
+      { cause: error }
+    );
+  }
+
+  return new Error(
+    `Database operation failed while ${action}${code ? ` (${code})` : ''}: ${safeMessage || 'Unknown error'}`,
+    { cause: error }
+  );
 }
 
 function assertAuthContext(auth: AuthContext): string {
@@ -217,12 +253,36 @@ function assertAuthContext(auth: AuthContext): string {
   return uid;
 }
 
+/**
+ * Use Firebase Admin SDK whenever FIREBASE_SERVICE_ACCOUNT_JSON is configured
+ * (even when auth.idToken is present), falling back to user idToken REST v1 only
+ * when no server service account is configured.
+ */
+function resolveAdminOrRest(auth: AuthContext) {
+  const adminDb = getFirebaseAdminFirestore();
+  if (adminDb) {
+    return { adminDb, idToken: undefined as string | undefined };
+  }
+
+  if (isFirebaseServiceAccountConfigured()) {
+    const status = getFirebaseAdminStatus();
+    throw new Error(
+      status.error || 'Firebase Admin SDK is configured via FIREBASE_SERVICE_ACCOUNT_JSON but failed to initialize.'
+    );
+  }
+
+  if (!auth.idToken) {
+    throw new OwnershipForbiddenError('Authenticated Firebase ID token is required for Cloud Firestore.');
+  }
+  return { adminDb: null, idToken: auth.idToken };
+}
+
 async function getConversationWithOwnershipCheck(
   auth: AuthContext,
   id: string
 ): Promise<DBConversation | undefined> {
   const uid = assertAuthContext(auth);
-  const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+  const { adminDb, idToken } = resolveAdminOrRest(auth);
 
   if (adminDb) {
     const snap = await adminDb.collection('conversations').doc(id).get();
@@ -234,13 +294,9 @@ async function getConversationWithOwnershipCheck(
     return conv;
   }
 
-  if (!auth.idToken) {
-    throw new OwnershipForbiddenError('Authenticated Firebase ID token is required for Cloud Firestore.');
-  }
-
   const url = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(id)}`;
   try {
-    const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken: auth.idToken });
+    const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken });
     const conv = mapConversationData(decodeDoc(doc));
     if (!conv.owner_uid || conv.owner_uid !== uid) {
       throw new OwnershipForbiddenError('You do not have permission to access this conversation.');
@@ -262,15 +318,26 @@ export const firestoreAdapter: DatabaseAdapter = {
 
   async testConnection(): Promise<{ ok: boolean; error?: string }> {
     try {
-      const adminDb = getOptionalAdminFirestore();
-      if (adminDb) {
+      if (isFirebaseServiceAccountConfigured()) {
+        const adminDb = getFirebaseAdminFirestore();
+        if (!adminDb) {
+          const status = getFirebaseAdminStatus();
+          return {
+            ok: false,
+            error: status.error || 'Failed to initialize Firebase Admin Firestore.',
+          };
+        }
         await adminDb.collection('_health').doc('connection').get();
         return { ok: true };
       }
 
+      const projectId = getFirebaseProjectId();
+      if (!projectId) {
+        return { ok: false, error: 'Firebase projectId is not configured.' };
+      }
+
       const url = `${getDocumentsBaseUrl()}/_health/connection`;
       const res = await fetch(url, { method: 'GET' });
-      // 200 (exists) or 404 (not created yet, but Firestore reachable & rule allowed)
       if (res.ok || res.status === 404) {
         return { ok: true };
       }
@@ -299,20 +366,16 @@ export const firestoreAdapter: DatabaseAdapter = {
           pinned: 0,
         };
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           await adminDb.collection('conversations').doc(id).set(firestoreDoc);
           return mapConversationData(firestoreDoc);
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/conversations?documentId=${encodeURIComponent(id)}`;
         await firestoreRestFetch(url, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: { fields: encodeFields(firestoreDoc) },
         });
         return mapConversationData(firestoreDoc);
@@ -325,8 +388,8 @@ export const firestoreAdapter: DatabaseAdapter = {
       try {
         const uid = assertAuthContext(auth);
         let list: DBConversation[] = [];
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
         if (adminDb) {
           const snap = await adminDb
             .collection('conversations')
@@ -334,13 +397,10 @@ export const firestoreAdapter: DatabaseAdapter = {
             .get();
           list = snap.docs.map((d) => mapConversationData(d.data() as Record<string, unknown>));
         } else {
-          if (!auth.idToken) {
-            throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-          }
           const url = `${getDocumentsBaseUrl()}:runQuery`;
           const rows = await firestoreRestFetch<Array<{ document?: FirestoreRestDoc }>>(url, {
             method: 'POST',
-            idToken: auth.idToken,
+            idToken,
             body: {
               structuredQuery: {
                 from: [{ collectionId: 'conversations' }],
@@ -404,14 +464,10 @@ export const firestoreAdapter: DatabaseAdapter = {
           patchFields.running_summary = updates.running_summary.slice(0, 20000);
         }
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           await adminDb.collection('conversations').doc(id).update(patchFields);
           return await getConversationWithOwnershipCheck(auth, id);
-        }
-
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
         }
 
         const maskParams = Object.keys(patchFields)
@@ -420,7 +476,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const url = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(id)}?currentDocument.exists=true&${maskParams}`;
         const updatedDoc = await firestoreRestFetch<FirestoreRestDoc>(url, {
           method: 'PATCH',
-          idToken: auth.idToken,
+          idToken,
           body: { fields: encodeFields(patchFields) },
         });
         const mapped = mapConversationData(decodeDoc(updatedDoc));
@@ -440,7 +496,7 @@ export const firestoreAdapter: DatabaseAdapter = {
 
         await firestoreAdapter.messages.deleteByConversation(auth, id);
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           await adminDb.collection('conversations').doc(id).delete();
           return { changes: 1 };
@@ -449,7 +505,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const url = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(id)}`;
         await firestoreRestFetch(url, {
           method: 'DELETE',
-          idToken: auth.idToken,
+          idToken,
         });
         return { changes: 1 };
       } catch (error) {
@@ -497,7 +553,7 @@ export const firestoreAdapter: DatabaseAdapter = {
           tokens: safeTokens,
         };
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           await adminDb
             .collection('conversations')
@@ -509,16 +565,12 @@ export const firestoreAdapter: DatabaseAdapter = {
           return mapMessageData(firestoreDoc);
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const msgUrl = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(
           conversationId
         )}/messages?documentId=${encodeURIComponent(id)}`;
         await firestoreRestFetch(msgUrl, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: { fields: encodeFields(firestoreDoc) },
         });
 
@@ -527,7 +579,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         )}?currentDocument.exists=true&updateMask.fieldPaths=updated_at`;
         await firestoreRestFetch(convPatchUrl, {
           method: 'PATCH',
-          idToken: auth.idToken,
+          idToken,
           body: { fields: encodeFields({ updated_at: now }) },
         });
 
@@ -547,7 +599,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const conv = await getConversationWithOwnershipCheck(auth, conversationId);
         if (!conv) return undefined;
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           const snap = await adminDb
             .collection('conversations')
@@ -567,7 +619,7 @@ export const firestoreAdapter: DatabaseAdapter = {
           conversationId
         )}/messages/${encodeURIComponent(id)}`;
         try {
-          const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken: auth.idToken });
+          const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken });
           return mapMessageData(decodeDoc(doc));
         } catch (err) {
           if (err instanceof FirestoreRestHttpError && err.status === 404) {
@@ -589,7 +641,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const conv = await getConversationWithOwnershipCheck(auth, conversationId);
         if (!conv) return [];
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           const snap = await adminDb
             .collection('conversations')
@@ -602,16 +654,12 @@ export const firestoreAdapter: DatabaseAdapter = {
             .sort((a, b) => a.created_at.localeCompare(b.created_at));
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(
           conversationId
         )}:runQuery`;
         const rows = await firestoreRestFetch<Array<{ document?: FirestoreRestDoc }>>(url, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: {
             structuredQuery: {
               from: [{ collectionId: 'messages' }],
@@ -644,7 +692,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const conv = await getConversationWithOwnershipCheck(auth, conversationId);
         if (!conv) return 0;
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           const snap = await adminDb
             .collection('conversations')
@@ -656,10 +704,6 @@ export const firestoreAdapter: DatabaseAdapter = {
           return snap.data().count;
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(
           conversationId
         )}:runAggregationQuery`;
@@ -667,7 +711,7 @@ export const firestoreAdapter: DatabaseAdapter = {
           Array<{ result?: { aggregateFields?: { total?: { integerValue?: string } } } }>
         >(url, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: {
             structuredAggregationQuery: {
               structuredQuery: {
@@ -728,7 +772,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const conv = await getConversationWithOwnershipCheck(auth, conversationId);
         if (!conv) return;
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           await adminDb
             .collection('conversations')
@@ -745,7 +789,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         try {
           await firestoreRestFetch(url, {
             method: 'DELETE',
-            idToken: auth.idToken,
+            idToken,
           });
         } catch (err) {
           if (err instanceof FirestoreRestHttpError && err.status === 404) {
@@ -767,7 +811,7 @@ export const firestoreAdapter: DatabaseAdapter = {
         const conv = await getConversationWithOwnershipCheck(auth, conversationId);
         if (!conv) return { changes: 0 };
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
         if (adminDb) {
           const snap = await adminDb
             .collection('conversations')
@@ -788,16 +832,12 @@ export const firestoreAdapter: DatabaseAdapter = {
           return { changes };
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const queryUrl = `${getDocumentsBaseUrl()}/conversations/${encodeURIComponent(
           conversationId
         )}:runQuery`;
         const rows = await firestoreRestFetch<Array<{ document?: FirestoreRestDoc }>>(queryUrl, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: {
             structuredQuery: {
               from: [{ collectionId: 'messages' }],
@@ -822,7 +862,7 @@ export const firestoreAdapter: DatabaseAdapter = {
           const chunk = docNames.slice(i, i + 400);
           await firestoreRestFetch(commitUrl, {
             method: 'POST',
-            idToken: auth.idToken,
+            idToken,
             body: {
               writes: chunk.map((name) => ({ delete: name })),
             },
@@ -841,7 +881,8 @@ export const firestoreAdapter: DatabaseAdapter = {
       if (!VALID_SETTING_KEYS.has(key)) return null;
       try {
         const uid = assertAuthContext(auth);
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
+
         if (adminDb) {
           const snap = await adminDb
             .collection('users')
@@ -853,15 +894,11 @@ export const firestoreAdapter: DatabaseAdapter = {
           return (snap.data()?.value as string) ?? null;
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/users/${encodeURIComponent(
           uid
         )}/settings/${encodeURIComponent(key)}`;
         try {
-          const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken: auth.idToken });
+          const doc = await firestoreRestFetch<FirestoreRestDoc>(url, { idToken });
           const data = decodeDoc(doc);
           return typeof data.value === 'string' ? data.value : null;
         } catch (err) {
@@ -880,8 +917,8 @@ export const firestoreAdapter: DatabaseAdapter = {
       try {
         const uid = assertAuthContext(auth);
         const safeValue = String(value).slice(0, 100);
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
 
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
         if (adminDb) {
           await adminDb
             .collection('users')
@@ -892,16 +929,12 @@ export const firestoreAdapter: DatabaseAdapter = {
           return;
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/users/${encodeURIComponent(
           uid
         )}/settings/${encodeURIComponent(key)}`;
         await firestoreRestFetch(url, {
           method: 'PATCH',
-          idToken: auth.idToken,
+          idToken,
           body: { fields: encodeFields({ key, value: safeValue }) },
         });
       } catch (error) {
@@ -912,7 +945,8 @@ export const firestoreAdapter: DatabaseAdapter = {
     getAll: async (auth: AuthContext): Promise<Record<string, string>> => {
       try {
         const uid = assertAuthContext(auth);
-        const adminDb = !auth.idToken ? getOptionalAdminFirestore() : null;
+        const { adminDb, idToken } = resolveAdminOrRest(auth);
+
         if (adminDb) {
           const snap = await adminDb.collection('users').doc(uid).collection('settings').get();
           const result: Record<string, string> = {};
@@ -925,14 +959,10 @@ export const firestoreAdapter: DatabaseAdapter = {
           return result;
         }
 
-        if (!auth.idToken) {
-          throw new OwnershipForbiddenError('Authenticated Firebase ID token is required.');
-        }
-
         const url = `${getDocumentsBaseUrl()}/users/${encodeURIComponent(uid)}:runQuery`;
         const rows = await firestoreRestFetch<Array<{ document?: FirestoreRestDoc }>>(url, {
           method: 'POST',
-          idToken: auth.idToken,
+          idToken,
           body: {
             structuredQuery: {
               from: [{ collectionId: 'settings' }],

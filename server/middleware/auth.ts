@@ -1,8 +1,9 @@
 import { createVerify } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import { initializeApp as initializeAdminApp, getApps as getAdminApps, cert, type App as AdminApp } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
+import {
+  getFirebaseAdminAuth,
+  getFirebaseProjectId,
+} from '../lib/firebaseAdmin.ts';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -23,46 +24,6 @@ const GOOGLE_SECURETOKEN_CERTS_URL =
 let cachedCerts: Record<string, string> = {};
 let certsExpiresAtMs = 0;
 let certsFetchPromise: Promise<Record<string, string>> | null = null;
-
-function getFirebaseProjectId(): string {
-  return (process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId || '').trim();
-}
-
-let cachedAdminApp: AdminApp | null | undefined;
-
-function getOptionalAdminApp(): AdminApp | null {
-  if (cachedAdminApp !== undefined) {
-    return cachedAdminApp;
-  }
-
-  const rawJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
-  if (!rawJson) {
-    cachedAdminApp = null;
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawJson);
-    const existing = getAdminApps().find((a) => a.name === 'nexora-admin');
-    cachedAdminApp =
-      existing ||
-      initializeAdminApp(
-        {
-          credential: cert(parsed),
-          projectId: parsed.project_id || getFirebaseProjectId(),
-        },
-        'nexora-admin'
-      );
-    return cachedAdminApp;
-  } catch (err) {
-    console.warn(
-      '[Auth] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON; falling back to public JWKS/X.509 verification:',
-      err instanceof Error ? err.message : err
-    );
-    cachedAdminApp = null;
-    return null;
-  }
-}
 
 function parseBase64UrlJson<T = Record<string, unknown>>(segment: string): T {
   const padded = segment.replace(/-/g, '+').replace(/_/g, '/');
@@ -137,10 +98,10 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<Authentica
     throw new AuthVerificationError('Authentication required.', 'AUTH_REQUIRED', 401);
   }
 
-  const adminApp = getOptionalAdminApp();
-  if (adminApp) {
+  const adminAuth = getFirebaseAdminAuth();
+  if (adminAuth) {
     try {
-      const decoded = await getAdminAuth(adminApp).verifyIdToken(token, false);
+      const decoded = await adminAuth.verifyIdToken(token, false);
       return {
         uid: decoded.uid,
         email: typeof decoded.email === 'string' ? decoded.email : undefined,
@@ -269,7 +230,7 @@ export async function requireAuth(
       res.status(err.httpStatus).json({ error: err.message, code: err.code });
       return;
     }
-    console.error('[Auth] Unexpected error verifying Firebase ID token:', err);
+    console.error('[Auth] Unexpected error verifying Firebase ID token:', err instanceof Error ? err.message : err);
     res.status(401).json({ error: 'Authentication verification failed.', code: 'AUTH_INVALID' });
   }
 }

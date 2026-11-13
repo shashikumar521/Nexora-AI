@@ -1,12 +1,27 @@
 import type { AuthContext, DBConversation, DBMessage, DatabaseAdapter } from './types.ts';
 import { OwnershipForbiddenError, VALID_SETTING_KEYS, nextIsoTimestamp } from './types.ts';
 import { postgresAdapter } from './postgres.ts';
+import {
+  getFirebaseAdminStatus,
+  isFirebaseServiceAccountConfigured,
+} from '../lib/firebaseAdmin.ts';
 
 export type { AuthContext, DBConversation, DBMessage };
 export { OwnershipForbiddenError };
 
 let resolvedAdapter: DatabaseAdapter | null = null;
 let resolvingAdapterPromise: Promise<DatabaseAdapter> | null = null;
+
+function readCleanEnv(name: string): string {
+  let raw = (process.env[name] ?? '').trim();
+  if (
+    (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) ||
+    (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2)
+  ) {
+    raw = raw.slice(1, -1).trim();
+  }
+  return raw;
+}
 
 function isUsablePostgresUrl(rawUrl: string): boolean {
   const trimmed = rawUrl.trim();
@@ -222,29 +237,25 @@ export function createInMemoryAdapter(): DatabaseAdapter {
 }
 
 async function resolveAdapter(): Promise<DatabaseAdapter> {
-  if (process.env.VERCEL) {
-    if (!process.env.DATABASE_URL?.trim()) {
-      throw new Error(
-        'DATABASE_URL is not configured in Vercel environment variables. Set DATABASE_URL to your Neon PostgreSQL connection string.'
-      );
-    }
-    return postgresAdapter;
-  }
+  const dbUrl = readCleanEnv('DATABASE_URL');
+  let pgFailureReason = '';
+  let fsFailureReason = '';
 
-  const dbUrl = process.env.DATABASE_URL?.trim() || '';
   if (dbUrl) {
     if (isUsablePostgresUrl(dbUrl)) {
       const pgCheck = await postgresAdapter.testConnection();
       if (pgCheck.ok) {
-        console.log('[Database] Connected to PostgreSQL.');
+        console.log('[Database] Connected to PostgreSQL (Neon).');
         return postgresAdapter;
       }
+      pgFailureReason = pgCheck.error || 'PostgreSQL connection check failed.';
       console.warn(
-        `[Database] PostgreSQL unavailable (${pgCheck.error || 'connection failed'}); falling back to Cloud Firestore.`
+        `[Database] PostgreSQL unavailable (${pgFailureReason}); checking Cloud Firestore.`
       );
     } else {
+      pgFailureReason = 'DATABASE_URL format is invalid or points to a placeholder host.';
       console.warn(
-        '[Database] Ignoring invalid or placeholder DATABASE_URL; using Cloud Firestore.'
+        '[Database] Ignoring invalid or placeholder DATABASE_URL; checking Cloud Firestore.'
       );
     }
   }
@@ -253,19 +264,41 @@ async function resolveAdapter(): Promise<DatabaseAdapter> {
     const mod = await import('./firestore.ts');
     const fsCheck = await mod.firestoreAdapter.testConnection();
     if (fsCheck.ok) {
-      console.log('[Database] Connected to Cloud Firestore.');
+      const adminStatus = getFirebaseAdminStatus();
+      console.log(
+        `[Database] Connected to Cloud Firestore (mode=${
+          adminStatus.initialized ? 'Admin SDK' : 'REST'
+        }, project=${adminStatus.projectId || 'unknown'}, database=${adminStatus.databaseId}).`
+      );
       return mod.firestoreAdapter;
     }
-    console.warn(
-      `[Database] Cloud Firestore unavailable (${fsCheck.error || 'connection failed'}); using in-memory fallback.`
-    );
+    fsFailureReason = fsCheck.error || 'Cloud Firestore connection check failed.';
+    console.warn(`[Database] Cloud Firestore unavailable (${fsFailureReason}).`);
   } catch (err) {
-    console.warn(
-      '[Database] Failed to initialize Cloud Firestore; using in-memory fallback.',
-      err instanceof Error ? err.message : err
+    fsFailureReason = err instanceof Error ? err.message : String(err);
+    console.warn('[Database] Failed to initialize Cloud Firestore:', fsFailureReason);
+  }
+
+  if (process.env.VERCEL) {
+    const parts: string[] = [];
+    if (dbUrl) {
+      parts.push(`PostgreSQL failed: ${pgFailureReason}`);
+    } else {
+      parts.push('DATABASE_URL is not set');
+    }
+    if (isFirebaseServiceAccountConfigured()) {
+      parts.push(`Cloud Firestore (Admin SDK) failed: ${fsFailureReason}`);
+    } else {
+      parts.push(
+        `Cloud Firestore service account is not configured (${fsFailureReason || 'set FIREBASE_SERVICE_ACCOUNT_JSON'})`
+      );
+    }
+    throw new Error(
+      `Database connection failed on Vercel. ${parts.join('; ')}. Verify DATABASE_URL or FIREBASE_SERVICE_ACCOUNT_JSON + FIREBASE_DATABASE_ID.`
     );
   }
 
+  console.warn('[Database] No persistent database available locally; using in-memory fallback.');
   return createInMemoryAdapter();
 }
 
@@ -289,15 +322,23 @@ async function getAdapter(): Promise<DatabaseAdapter> {
 
 export function getDatabaseProviderName(): string {
   if (resolvedAdapter) {
+    if (resolvedAdapter.providerName === 'Cloud Firestore') {
+      const status = getFirebaseAdminStatus();
+      return status.initialized
+        ? `Cloud Firestore (Admin SDK: ${status.databaseId})`
+        : `Cloud Firestore (REST: ${status.databaseId})`;
+    }
     return resolvedAdapter.providerName;
   }
-  if (process.env.VERCEL) {
-    return process.env.DATABASE_URL?.trim() ? 'PostgreSQL (Neon)' : 'PostgreSQL (unconfigured)';
-  }
-  if (process.env.DATABASE_URL?.trim() && isUsablePostgresUrl(process.env.DATABASE_URL)) {
+  const dbUrl = readCleanEnv('DATABASE_URL');
+  if (dbUrl && isUsablePostgresUrl(dbUrl)) {
     return 'PostgreSQL (Neon)';
   }
-  return 'Cloud Firestore';
+  if (isFirebaseServiceAccountConfigured()) {
+    const status = getFirebaseAdminStatus();
+    return `Cloud Firestore (Admin SDK: ${status.databaseId})`;
+  }
+  return process.env.VERCEL ? 'Database (unconfigured)' : 'Cloud Firestore';
 }
 
 export async function testDatabaseConnection(): Promise<{ ok: boolean; error?: string }> {

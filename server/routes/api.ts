@@ -14,6 +14,9 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth.ts';
 import {
+  getFirebaseAdminStatus,
+} from '../lib/firebaseAdmin.ts';
+import {
   generateChatResponse,
   streamChatResponse,
   generateConversationTitle,
@@ -74,6 +77,9 @@ function getAuthContext(req: AuthenticatedRequest): AuthContext {
 
 function redactSensitiveText(msg: string): string {
   return msg
+    .replace(/-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
+    .replace(/"private_key"\s*:\s*"[^"]*"/gi, '"private_key":"[REDACTED]"')
+    .replace(/Bearer\s+[A-Za-z0-9\-_.]+/gi, 'Bearer [REDACTED]')
     .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_KEY]')
     .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[REDACTED_DATABASE_URL]')
     .replace(/key=[^&\s"']+/gi, 'key=[REDACTED]')
@@ -118,7 +124,10 @@ function classifyRouteError(err: unknown): {
   const rawMsg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
   const cleanMsg = redactSensitiveText(rawMsg).trim();
 
-  if (cleanMsg.includes('PostgreSQL permission denied')) {
+  if (
+    cleanMsg.includes('PostgreSQL permission denied') ||
+    cleanMsg.includes('Firestore permission denied')
+  ) {
     return {
       category: 'DATABASE_PERMISSION_ERROR',
       httpStatus: 500,
@@ -129,7 +138,9 @@ function classifyRouteError(err: unknown): {
   if (
     cleanMsg.includes('DATABASE_URL') ||
     cleanMsg.includes('Database connection failed') ||
-    cleanMsg.includes('Database request timed out')
+    cleanMsg.includes('Database request timed out') ||
+    cleanMsg.includes('FIREBASE_SERVICE_ACCOUNT_JSON') ||
+    cleanMsg.includes('Firebase Admin')
   ) {
     return {
       category: 'DATABASE_CONNECTION_ERROR',
@@ -153,12 +164,22 @@ function classifyRouteError(err: unknown): {
   };
 }
 
-function sanitizeErrorMessage(err: unknown): string {
-  return classifyRouteError(err).message;
-}
-
-function getDbErrorStatus(err: unknown): number {
-  return classifyRouteError(err).httpStatus;
+function handleRouteError(route: string, err: unknown, res: Response, fallbackMessage: string) {
+  const classified = classifyRouteError(err);
+  const provider = getDatabaseProviderName();
+  const adminStatus = getFirebaseAdminStatus();
+  console.error(`[API] ${route} failed:`, {
+    category: classified.category,
+    httpStatus: classified.httpStatus,
+    provider,
+    firebaseAdminConfigured: adminStatus.configured,
+    firebaseAdminInitialized: adminStatus.initialized,
+    message: classified.message || fallbackMessage,
+  });
+  return res.status(classified.httpStatus).json({
+    error: classified.message || fallbackMessage,
+    code: classified.category,
+  });
 }
 
 /**
@@ -169,6 +190,7 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
   const hasKey = isGeminiApiKeyConfigured();
   const dbCheck = await testDatabaseConnection();
   const provider = getDatabaseProviderName();
+  const firebaseAdmin = getFirebaseAdminStatus();
   const verifyGemini = req.query.verify === 'gemini';
   const geminiVerification = verifyGemini ? await verifyGeminiAccess() : undefined;
 
@@ -181,6 +203,7 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
     model: getActiveModel(),
     apiKeyConfigured: hasKey,
     database: dbCheck.ok ? `connected (${provider})` : 'unavailable',
+    firebaseAdmin,
     ...(dbCheck.ok ? {} : { databaseError: dbCheck.error || 'Database unavailable' }),
     ...(geminiVerification ? { geminiVerification } : {}),
     timestamp: new Date().toISOString(),
@@ -218,10 +241,8 @@ apiRouter.get('/conversations', async (req: AuthenticatedRequest, res: Response)
     const search = req.query.search as string | undefined;
     const conversations = await conversationQueries.getAll(auth, search);
     res.json({ conversations });
-  } catch (error: any) {
-    console.error('[API] GET /conversations failed:', error);
-    const status = getDbErrorStatus(error);
-    res.status(status).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve conversations.' });
+  } catch (error: unknown) {
+    return handleRouteError('GET /conversations', error, res, 'Failed to retrieve conversations.');
   }
 });
 
@@ -240,12 +261,13 @@ apiRouter.post('/conversations', async (req: AuthenticatedRequest, res: Response
       return res.status(500).json({ error: 'Database did not confirm conversation creation.' });
     }
     res.status(201).json({ conversation });
-  } catch (error: any) {
-    console.error('[API] POST /conversations failed:', error);
-    const status = getDbErrorStatus(error);
-    res.status(status).json({
-      error: sanitizeErrorMessage(error) || 'Failed to create conversation session in persistent storage.',
-    });
+  } catch (error: unknown) {
+    return handleRouteError(
+      'POST /conversations',
+      error,
+      res,
+      'Failed to create conversation session in persistent storage.'
+    );
   }
 });
 
@@ -267,9 +289,8 @@ apiRouter.get('/conversations/:id', async (req: AuthenticatedRequest, res: Respo
 
     const messages = await messageQueries.getByConversation(auth, id);
     res.json({ conversation, messages });
-  } catch (error: any) {
-    console.error('[API] GET /conversations/:id failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve conversation.' });
+  } catch (error: unknown) {
+    return handleRouteError('GET /conversations/:id', error, res, 'Failed to retrieve conversation.');
   }
 });
 
@@ -297,9 +318,8 @@ apiRouter.patch('/conversations/:id', async (req: AuthenticatedRequest, res: Res
     });
 
     res.json({ conversation: updated });
-  } catch (error: any) {
-    console.error('[API] PATCH /conversations/:id failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to update conversation.' });
+  } catch (error: unknown) {
+    return handleRouteError('PATCH /conversations/:id', error, res, 'Failed to update conversation.');
   }
 });
 
@@ -321,9 +341,8 @@ apiRouter.delete('/conversations/:id', async (req: AuthenticatedRequest, res: Re
 
     await conversationQueries.delete(auth, id);
     res.json({ success: true, id });
-  } catch (error: any) {
-    console.error('[API] DELETE /conversations/:id failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to delete conversation.' });
+  } catch (error: unknown) {
+    return handleRouteError('DELETE /conversations/:id', error, res, 'Failed to delete conversation.');
   }
 });
 
@@ -364,9 +383,8 @@ apiRouter.get('/conversations/:id/memory', async (req: AuthenticatedRequest, res
       activeContextTokens: totalActiveTokens,
       tokenCapacity: 1000000,
     });
-  } catch (error: any) {
-    console.error('[API] GET /conversations/:id/memory failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve memory status.' });
+  } catch (error: unknown) {
+    return handleRouteError('GET /conversations/:id/memory', error, res, 'Failed to retrieve memory status.');
   }
 });
 
@@ -388,9 +406,8 @@ apiRouter.post('/conversations/:id/clear', async (req: AuthenticatedRequest, res
     await messageQueries.deleteByConversation(auth, id);
     await conversationQueries.update(auth, id, { running_summary: '' });
     res.json({ success: true, message: 'Conversation context reset successfully' });
-  } catch (error: any) {
-    console.error('[API] POST /conversations/:id/clear failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to reset conversation context.' });
+  } catch (error: unknown) {
+    return handleRouteError('POST /conversations/:id/clear', error, res, 'Failed to reset conversation context.');
   }
 });
 
@@ -654,12 +671,8 @@ apiRouter.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
     const auth = getAuthContext(req);
     const settings = await settingsQueries.getAll(auth);
     res.json(formatSettingsResponse(settings));
-  } catch (error: any) {
-    console.error('[API] GET /settings failed:', error);
-    const status = getDbErrorStatus(error);
-    res.status(status).json({
-      error: sanitizeErrorMessage(error) || 'Failed to load settings from persistent storage.',
-    });
+  } catch (error: unknown) {
+    return handleRouteError('GET /settings', error, res, 'Failed to load settings from persistent storage.');
   }
 });
 
@@ -702,10 +715,8 @@ apiRouter.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
 
     const updated = await settingsQueries.getAll(auth);
     res.json({ success: true, settings: formatSettingsResponse(updated) });
-  } catch (error: any) {
-    console.error('[API] PUT /settings failed:', error);
-    const status = getDbErrorStatus(error);
-    res.status(status).json({ error: sanitizeErrorMessage(error) || 'Failed to persist settings.' });
+  } catch (error: unknown) {
+    return handleRouteError('PUT /settings', error, res, 'Failed to persist settings.');
   }
 });
 
@@ -718,8 +729,7 @@ apiRouter.delete('/data/clear', async (req: AuthenticatedRequest, res: Response)
     const auth = getAuthContext(req);
     await conversationQueries.clearAll(auth);
     res.json({ success: true, message: 'All workspace data for your account cleared successfully' });
-  } catch (error: any) {
-    console.error('[API] DELETE /data/clear failed:', error);
-    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to clear workspace data.' });
+  } catch (error: unknown) {
+    return handleRouteError('DELETE /data/clear', error, res, 'Failed to clear workspace data.');
   }
 });

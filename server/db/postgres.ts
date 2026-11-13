@@ -31,8 +31,19 @@ function shouldUseSsl(connectionString: string): boolean {
   return process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
 }
 
+function getConfiguredDatabaseUrl(): string {
+  let raw = (process.env.DATABASE_URL ?? '').trim();
+  if (
+    (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) ||
+    (raw.startsWith("'") && raw.endsWith("'") && raw.length >= 2)
+  ) {
+    raw = raw.slice(1, -1).trim();
+  }
+  return raw;
+}
+
 function getPool(): Pool {
-  const connectionString = process.env.DATABASE_URL?.trim();
+  const connectionString = getConfiguredDatabaseUrl();
   if (!connectionString) {
     throw new Error('DATABASE_URL environment variable is not configured.');
   }
@@ -71,44 +82,70 @@ function normalizePgError(action: string, error: unknown): Error {
     return error;
   }
   const errObj = error as { code?: string; message?: string };
+  const code = String(errObj?.code || '').trim();
   const rawMessage = errObj?.message || String(error);
   const sanitized = rawMessage
-    .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DATABASE_URL]')
-    .replace(/password=[^\s&]+/gi, 'password=[REDACTED]');
+    .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[REDACTED_DATABASE_URL]')
+    .replace(/password=[^\s&"']+/gi, 'password=[REDACTED]');
 
-  console.error(`[PostgreSQL] ${action} failed (${errObj?.code || 'ERR'}):`, sanitized);
+  console.error(`[PostgreSQL] ${action} failed (${code || 'ERR'}):`, sanitized);
 
-  if (
-    errObj?.code === 'ETIMEDOUT' ||
-    errObj?.code === '57014' ||
-    sanitized.toLowerCase().includes('timeout')
-  ) {
-    return new Error(`Database request timed out while ${action}. Please try again.`, {
+  const lower = sanitized.toLowerCase();
+
+  if (code === 'ETIMEDOUT' || code === '57014' || lower.includes('timeout')) {
+    return new Error(`Database request timed out while ${action} (${code || 'TIMEOUT'}). Please try again.`, {
       cause: error,
     });
   }
 
+  const connectionCodes = new Set([
+    'ECONNREFUSED',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'ECONNRESET',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'EPIPE',
+    '28P01',
+    '28000',
+    '3D000',
+    '57P01',
+    '57P03',
+    '08001',
+    '08003',
+    '08004',
+    '08006',
+    'XX000',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  ]);
+
   if (
-    errObj?.code === 'ECONNREFUSED' ||
-    errObj?.code === 'ENOTFOUND' ||
-    errObj?.code === '28P01' ||
-    errObj?.code === '57P01' ||
-    sanitized.includes('DATABASE_URL')
+    connectionCodes.has(code) ||
+    sanitized.includes('DATABASE_URL') ||
+    lower.includes('ssl') ||
+    lower.includes('certificate') ||
+    lower.includes('endpoint') ||
+    lower.includes('connection terminated')
   ) {
     return new Error(
-      `Database connection failed while ${action}. Verify DATABASE_URL and database availability.`,
+      `Database connection failed while ${action} (${code || 'CONN_ERR'}). Verify DATABASE_URL and database availability.`,
       { cause: error }
     );
   }
 
-  if (errObj?.code === '42501') {
+  if (code === '42501') {
     return new Error(
       `PostgreSQL permission denied while ${action}. Verify database role privileges on Neon.`,
       { cause: error }
     );
   }
 
-  return new Error(`Database operation failed while ${action}.`, { cause: error });
+  return new Error(
+    `Database operation failed while ${action}${code ? ` (${code})` : ''}.`,
+    { cause: error }
+  );
 }
 
 async function ensureSchema(): Promise<void> {
@@ -127,6 +164,8 @@ async function ensureSchema(): Promise<void> {
         );
 
         ALTER TABLE conversations ADD COLUMN IF NOT EXISTS owner_uid VARCHAR(128);
+        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS running_summary TEXT NOT NULL DEFAULT '';
+        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned INTEGER NOT NULL DEFAULT 0;
 
         CREATE TABLE IF NOT EXISTS messages (
           id VARCHAR(128) PRIMARY KEY,

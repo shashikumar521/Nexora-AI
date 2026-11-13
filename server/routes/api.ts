@@ -12,6 +12,11 @@ import {
   streamChatResponse,
   generateConversationTitle,
   getActiveModel,
+  getConfiguredGeminiApiKey,
+  isGeminiApiKeyConfigured,
+  listAvailableModels,
+  verifyGeminiAccess,
+  GeminiServiceError,
   RECENT_MESSAGE_WINDOW,
 } from '../services/gemini.ts';
 
@@ -51,87 +56,126 @@ function rateLimiter(req: Request, res: Response, next: NextFunction) {
 
 apiRouter.use(rateLimiter);
 
-function sanitizeErrorMessage(err: any): string {
-  if (!err) return 'An unexpected server error occurred.';
-  const msg = typeof err === 'string' ? err : err.message || '';
-  const status = err.status || err.code;
-
-  if (status === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota exceeded') || msg.includes('429')) {
-    return 'Gemini API rate limit exceeded. Please wait a moment and try again.';
-  }
-  if (status === 403 || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
-    return 'Permission denied. Please check your Gemini API key or database permissions.';
-  }
-  if (msg.includes('Timeout') || msg.includes('timed out')) {
-    return 'Request timed out waiting for the AI model to respond. Please try again.';
-  }
-  if (status === 503 || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
-    return 'The AI model is currently busy. Please retry in a few moments.';
-  }
-
-  // Strip any API keys, database URLs, URLs, or internal filesystem paths
-  const clean = msg
-    .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
-    .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DATABASE_URL]')
-    .replace(/key=[^&\s]+/gi, 'key=[REDACTED]')
-    .replace(/https?:\/\/[^\s]+/g, '[REDACTED_URL]')
+function redactSensitiveText(msg: string): string {
+  return msg
+    .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_KEY]')
+    .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, '[REDACTED_DATABASE_URL]')
+    .replace(/key=[^&\s"']+/gi, 'key=[REDACTED]')
+    .replace(/https?:\/\/[^\s"']+/g, '[REDACTED_URL]')
     .replace(/\/app\/[^\s:]+/g, '[INTERNAL_PATH]');
+}
 
-  return clean.trim() || 'An error occurred while processing your request.';
+type AppErrorCategory =
+  | 'GEMINI_AUTH_ERROR'
+  | 'GEMINI_PERMISSION_ERROR'
+  | 'GEMINI_MODEL_ERROR'
+  | 'GEMINI_RATE_LIMIT'
+  | 'GEMINI_TIMEOUT'
+  | 'GEMINI_SERVER_ERROR'
+  | 'DATABASE_CONNECTION_ERROR'
+  | 'DATABASE_PERMISSION_ERROR'
+  | 'DATABASE_ERROR'
+  | 'APP_ERROR';
+
+function classifyRouteError(err: unknown): {
+  category: AppErrorCategory;
+  httpStatus: number;
+  message: string;
+} {
+  if (err instanceof GeminiServiceError) {
+    return {
+      category: err.category,
+      httpStatus: err.httpStatus,
+      message: err.message,
+    };
+  }
+
+  const rawMsg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  const cleanMsg = redactSensitiveText(rawMsg).trim();
+
+  if (cleanMsg.includes('PostgreSQL permission denied')) {
+    return {
+      category: 'DATABASE_PERMISSION_ERROR',
+      httpStatus: 500,
+      message: cleanMsg,
+    };
+  }
+
+  if (
+    cleanMsg.includes('DATABASE_URL') ||
+    cleanMsg.includes('Database connection failed') ||
+    cleanMsg.includes('Database request timed out')
+  ) {
+    return {
+      category: 'DATABASE_CONNECTION_ERROR',
+      httpStatus: 503,
+      message: cleanMsg,
+    };
+  }
+
+  if (cleanMsg.includes('Database operation failed')) {
+    return {
+      category: 'DATABASE_ERROR',
+      httpStatus: 500,
+      message: cleanMsg,
+    };
+  }
+
+  return {
+    category: 'APP_ERROR',
+    httpStatus: 500,
+    message: cleanMsg || 'An unexpected server error occurred.',
+  };
+}
+
+function sanitizeErrorMessage(err: unknown): string {
+  return classifyRouteError(err).message;
 }
 
 function getDbErrorStatus(err: unknown): number {
-  const msg = err instanceof Error ? err.message : String(err || '');
-  if (
-    msg.includes('DATABASE_URL') ||
-    msg.includes('Database connection failed') ||
-    msg.includes('timed out')
-  ) {
-    return 503;
-  }
-  return 500;
+  return classifyRouteError(err).httpStatus;
 }
 
 /**
  * GET /api/health
  */
-apiRouter.get('/health', async (_req: Request, res: Response) => {
-  const key = process.env.GEMINI_API_KEY || '';
-  const hasKey = Boolean(key && key.trim() && key !== 'MY_GEMINI_API_KEY');
+apiRouter.get('/health', async (req: Request, res: Response) => {
+  const hasKey = isGeminiApiKeyConfigured();
   const provider = getDatabaseProviderName();
   const dbCheck = await testDatabaseConnection();
+  const verifyGemini = req.query.verify === 'gemini';
+  const geminiVerification = verifyGemini ? await verifyGeminiAccess() : undefined;
 
-  res.status(dbCheck.ok ? 200 : 503).json({
-    status: dbCheck.ok ? 'ok' : 'degraded',
+  const overallOk = dbCheck.ok && (!verifyGemini || Boolean(geminiVerification?.ok));
+
+  res.status(overallOk ? 200 : dbCheck.ok ? geminiVerification?.httpStatus || 503 : 503).json({
+    status: overallOk ? 'ok' : 'degraded',
     app: 'Nexora AI',
     version: '1.0.0',
     model: getActiveModel(),
     apiKeyConfigured: hasKey,
     database: dbCheck.ok ? `connected (${provider})` : 'unavailable',
     ...(dbCheck.ok ? {} : { databaseError: dbCheck.error || 'Database unavailable' }),
+    ...(geminiVerification ? { geminiVerification } : {}),
     timestamp: new Date().toISOString(),
   });
 });
 
 apiRouter.get('/models', async (_req: Request, res: Response) => {
   try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured in backend environment.' });
-    }
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
-    });
-    const list = await ai.models.list();
-    const modelNames: string[] = [];
-    for await (const m of list) {
-      if (m.name) modelNames.push(m.name);
-    }
+    const modelNames = await listAvailableModels();
     res.json({ models: modelNames });
-  } catch (err: any) {
-    console.error('[API] Failed to list models:', err?.message || err);
-    res.status(500).json({ error: sanitizeErrorMessage(err) });
+  } catch (err: unknown) {
+    const classified = classifyRouteError(err);
+    console.error('[API] GET /models failed:', {
+      category: classified.category,
+      httpStatus: classified.httpStatus,
+      message: classified.message,
+    });
+    res.status(classified.httpStatus).json({
+      error: classified.message,
+      code: classified.category,
+    });
   }
 });
 
@@ -337,9 +381,13 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
   }
 
   // Check API key before mutating DB
-  if (!process.env.GEMINI_API_KEY) {
-    return res.status(500).json({
-      error: 'GEMINI_API_KEY is not configured in backend environment. Please check your deployment environment variables.',
+  try {
+    getConfiguredGeminiApiKey();
+  } catch (keyErr: unknown) {
+    const classified = classifyRouteError(keyErr);
+    return res.status(classified.httpStatus).json({
+      error: classified.message,
+      code: classified.category,
     });
   }
 
@@ -401,17 +449,31 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
           })}\n\n`
         );
         res.end();
-      } catch (err: any) {
-        console.error('[API] Streaming error in chat route:', err?.message || err);
+      } catch (err: unknown) {
+        const classified = classifyRouteError(err);
+        console.error('[API] Streaming error in chat route:', {
+          conversationId: id,
+          category: classified.category,
+          httpStatus: classified.httpStatus,
+          message: classified.message,
+        });
         try {
           await messageQueries.deleteById(id, userMsgId);
         } catch (cleanErr) {
           console.warn('[API] Could not clean up failed user message:', cleanErr);
         }
 
-        const errorMessage = sanitizeErrorMessage(err);
-        res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
-        res.end();
+        if (!res.writableEnded) {
+          res.write(
+            `data: ${JSON.stringify({
+              type: 'error',
+              error: classified.message,
+              code: classified.category,
+              status: classified.httpStatus,
+            })}\n\n`
+          );
+          res.end();
+        }
       }
     } else {
       try {
@@ -434,21 +496,38 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
           tokens: result.tokens,
           runningSummary: result.runningSummary,
         });
-      } catch (err: any) {
-        console.error('[API] Error generating chat response:', err?.message || err);
+      } catch (err: unknown) {
+        const classified = classifyRouteError(err);
+        console.error('[API] Error generating chat response:', {
+          conversationId: id,
+          category: classified.category,
+          httpStatus: classified.httpStatus,
+          message: classified.message,
+        });
         try {
           await messageQueries.deleteById(id, userMsgId);
         } catch (cleanErr) {
           console.warn('[API] Could not clean up failed user message:', cleanErr);
         }
 
-        const errorMessage = sanitizeErrorMessage(err);
-        res.status(500).json({ error: errorMessage });
+        res.status(classified.httpStatus).json({
+          error: classified.message,
+          code: classified.category,
+        });
       }
     }
-  } catch (err: any) {
-    console.error('[API] POST /chat/:id setup failed:', err);
-    res.status(getDbErrorStatus(err)).json({ error: sanitizeErrorMessage(err) });
+  } catch (err: unknown) {
+    const classified = classifyRouteError(err);
+    console.error('[API] POST /chat/:id setup failed:', {
+      conversationId: id,
+      category: classified.category,
+      httpStatus: classified.httpStatus,
+      message: classified.message,
+    });
+    res.status(classified.httpStatus).json({
+      error: classified.message,
+      code: classified.category,
+    });
   }
 });
 
@@ -497,9 +576,17 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
       latencyMs: result.latencyMs,
       tokens: result.tokens,
     });
-  } catch (error: any) {
-    console.error('[API] POST /conversations/:id/regenerate failed:', error);
-    res.status(500).json({ error: sanitizeErrorMessage(error) });
+  } catch (error: unknown) {
+    const classified = classifyRouteError(error);
+    console.error('[API] POST /conversations/:id/regenerate failed:', {
+      category: classified.category,
+      httpStatus: classified.httpStatus,
+      message: classified.message,
+    });
+    res.status(classified.httpStatus).json({
+      error: classified.message,
+      code: classified.category,
+    });
   }
 });
 

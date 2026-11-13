@@ -96,6 +96,13 @@ function normalizePgError(action: string, error: unknown): Error {
     );
   }
 
+  if (errObj?.code === '42501') {
+    return new Error(
+      `PostgreSQL permission denied while ${action}. Verify database role privileges on Neon.`,
+      { cause: error }
+    );
+  }
+
   return new Error(`Database operation failed while ${action}.`, { cause: error });
 }
 

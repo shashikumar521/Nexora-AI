@@ -1,34 +1,74 @@
 import { Conversation, Message, MemoryStatus, AppSettings, HealthStatus } from '../types';
 
+function apiUrl(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
+async function parseJsonResponse<T>(res: Response, fallbackError: string): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+
+  if (!isJson) {
+    if (contentType.includes('text/html')) {
+      throw new Error(
+        'Backend API returned HTML instead of JSON. Ensure the Express backend server is running and handling /api/* routes.'
+      );
+    }
+    if (!res.ok) {
+      throw new Error(`${fallbackError} (HTTP ${res.status})`);
+    }
+  }
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const serverMsg = data?.error || data?.message;
+    throw new Error(serverMsg || `${fallbackError} (HTTP ${res.status})`);
+  }
+
+  if (data === null) {
+    throw new Error('Server returned an empty or malformed JSON response.');
+  }
+
+  return data as T;
+}
+
 export const api = {
   async getHealth(): Promise<HealthStatus> {
-    const res = await fetch('/api/health');
-    if (!res.ok) throw new Error('Health check failed');
-    return res.json();
+    const res = await fetch(apiUrl('/api/health'));
+    return parseJsonResponse<HealthStatus>(res, 'Health check failed');
   },
 
   async getConversations(search?: string): Promise<Conversation[]> {
     const query = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await fetch(`/api/conversations${query}`);
-    if (!res.ok) throw new Error('Failed to fetch conversations');
-    const data = await res.json();
+    const res = await fetch(apiUrl(`/api/conversations${query}`));
+    const data = await parseJsonResponse<{ conversations?: Conversation[] }>(
+      res,
+      'Failed to fetch conversations'
+    );
     return data.conversations || [];
   },
 
   async getConversation(id: string): Promise<{ conversation: Conversation; messages: Message[] }> {
-    const res = await fetch(`/api/conversations/${id}`);
-    if (!res.ok) throw new Error('Failed to fetch conversation');
-    return res.json();
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`));
+    return parseJsonResponse<{ conversation: Conversation; messages: Message[] }>(
+      res,
+      'Failed to fetch conversation'
+    );
   },
 
   async createConversation(title?: string): Promise<Conversation> {
-    const res = await fetch('/api/conversations', {
+    const res = await fetch(apiUrl('/api/conversations'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: title || 'New Chat' }),
     });
-    if (!res.ok) throw new Error('Failed to create conversation');
-    const data = await res.json();
+    const data = await parseJsonResponse<{ conversation?: Conversation }>(
+      res,
+      'Failed to create conversation session'
+    );
+    if (!data.conversation || !data.conversation.id) {
+      throw new Error('Server did not confirm a valid conversation ID.');
+    }
     return data.conversation;
   },
 
@@ -36,67 +76,97 @@ export const api = {
     id: string,
     updates: { title?: string; pinned?: boolean }
   ): Promise<Conversation> {
-    const res = await fetch(`/api/conversations/${id}`, {
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    if (!res.ok) throw new Error('Failed to update conversation');
-    const data = await res.json();
+    const data = await parseJsonResponse<{ conversation: Conversation }>(
+      res,
+      'Failed to update conversation'
+    );
     return data.conversation;
   },
 
   async deleteConversation(id: string): Promise<void> {
-    const res = await fetch(`/api/conversations/${id}`, {
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`), {
       method: 'DELETE',
     });
-    if (!res.ok) throw new Error('Failed to delete conversation');
+    await parseJsonResponse(res, 'Failed to delete conversation');
   },
 
   async getMemoryStatus(id: string): Promise<MemoryStatus> {
-    const res = await fetch(`/api/conversations/${id}/memory`);
-    if (!res.ok) throw new Error('Failed to fetch memory status');
-    return res.json();
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/memory`));
+    return parseJsonResponse<MemoryStatus>(res, 'Failed to fetch memory status');
   },
 
   async clearConversationContext(id: string): Promise<void> {
-    const res = await fetch(`/api/conversations/${id}/clear`, {
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/clear`), {
       method: 'POST',
     });
-    if (!res.ok) throw new Error('Failed to reset conversation context');
+    await parseJsonResponse(res, 'Failed to reset conversation context');
   },
 
   async clearAllData(): Promise<void> {
-    const res = await fetch('/api/data/clear', {
+    const res = await fetch(apiUrl('/api/data/clear'), {
       method: 'DELETE',
     });
-    if (!res.ok) throw new Error('Failed to wipe workspace data');
+    await parseJsonResponse(res, 'Failed to wipe workspace data');
   },
 
   async getSettings(): Promise<AppSettings> {
-    const res = await fetch('/api/settings');
-    if (!res.ok) throw new Error('Failed to load settings');
-    return res.json();
+    const res = await fetch(apiUrl('/api/settings'));
+    return parseJsonResponse<AppSettings>(res, 'Failed to load settings');
   },
 
-  async updateSettings(settings: Partial<AppSettings>): Promise<void> {
-    const res = await fetch('/api/settings', {
+  async updateSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+    const res = await fetch(apiUrl('/api/settings'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
     });
-    if (!res.ok) throw new Error('Failed to persist settings');
+    const data = await parseJsonResponse<{ success?: boolean; settings?: AppSettings }>(
+      res,
+      'Failed to save settings'
+    );
+    if (!data.success || !data.settings) {
+      throw new Error('Server did not confirm that settings were saved.');
+    }
+    return data.settings;
   },
 
-  async regenerate(id: string): Promise<{ assistantMessage: Message; model: string; latencyMs: number; tokens: number }> {
-    const res = await fetch(`/api/conversations/${id}/regenerate`, {
+  async regenerate(
+    id: string
+  ): Promise<{ assistantMessage: Message; model: string; latencyMs: number; tokens: number }> {
+    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/regenerate`), {
       method: 'POST',
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Regeneration failed' }));
-      throw new Error(err.error || 'Regeneration failed');
-    }
-    return res.json();
+    return parseJsonResponse<{
+      assistantMessage: Message;
+      model: string;
+      latencyMs: number;
+      tokens: number;
+    }>(res, 'Regeneration failed');
+  },
+
+  async sendChatMessage(
+    conversationId: string,
+    message: string,
+    abortSignal?: AbortSignal
+  ): Promise<{
+    assistantMessage: Message;
+    model: string;
+    latencyMs: number;
+    tokens: number;
+    runningSummary?: string;
+  }> {
+    const res = await fetch(apiUrl(`/api/chat/${encodeURIComponent(conversationId)}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, stream: false }),
+      signal: abortSignal,
+    });
+    return parseJsonResponse(res, 'Failed to send message');
   },
 
   sendChatMessageStream(
@@ -104,10 +174,16 @@ export const api = {
     message: string,
     abortSignal: AbortSignal,
     onChunk: (chunk: string) => void,
-    onDone: (meta: { messageId?: string; model?: string; latencyMs?: number; tokens?: number; runningSummary?: string }) => void,
+    onDone: (meta: {
+      messageId?: string;
+      model?: string;
+      latencyMs?: number;
+      tokens?: number;
+      runningSummary?: string;
+    }) => void,
     onError: (err: string) => void
   ) {
-    fetch(`/api/chat/${conversationId}`, {
+    fetch(apiUrl(`/api/chat/${encodeURIComponent(conversationId)}`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, stream: true }),
@@ -120,7 +196,7 @@ export const api = {
           if (!msg) {
             if (response.status === 429) msg = 'Gemini API rate limit exceeded. Please wait a moment and try again.';
             else if (response.status === 503) msg = 'The AI model is currently busy. Please retry in a few moments.';
-            else if (response.status === 403) msg = 'Permission denied. Please verify your Gemini API key in AI Studio Secrets.';
+            else if (response.status === 403) msg = 'Permission denied. Please verify your Gemini API key or CORS configuration.';
             else msg = `Server error (${response.status}). Please try again.`;
           }
           onError(msg);
@@ -171,10 +247,13 @@ export const api = {
       })
       .catch((err) => {
         if (err.name === 'AbortError') {
-          // Stream cancelled by user
           onDone({ model: 'Cancelled by user' });
         } else {
-          onError(err.message?.includes('fetch') ? 'Unable to reach the server. Please check your internet connection.' : (err.message || 'Network request failed'));
+          onError(
+            err.message?.includes('fetch')
+              ? 'Unable to reach the server. Please check your internet connection.'
+              : err.message || 'Network request failed'
+          );
         }
       });
   },

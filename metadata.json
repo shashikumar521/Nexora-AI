@@ -1,6 +1,6 @@
 {
   "name": "Nexora AI",
-  "description": "Intelligent conversational assistant powered by Google Gemini with 25-message memory and progressive summarization.",
+  "description": "Intelligent conversational assistant powered by Google Gemini with 20-message memory and progressive summarization.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

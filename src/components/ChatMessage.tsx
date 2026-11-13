@@ -22,6 +22,7 @@ interface ChatMessageProps {
   onSuggestedPrompt?: (prompt: string) => void;
   suggestedPrompts?: string[];
   activeModelName?: string;
+  showSyntaxHighlighting?: boolean;
 }
 
 export const ChatMessage: React.FC<ChatMessageProps> = ({
@@ -33,6 +34,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onSuggestedPrompt,
   suggestedPrompts = [],
   activeModelName,
+  showSyntaxHighlighting = true,
 }) => {
   const [copied, setCopied] = useState(false);
   const [liked, setLiked] = useState<boolean | null>(null);
@@ -118,7 +120,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
         {/* Message Content Body */}
         <div className="bg-transparent rounded-xl w-full max-w-full overflow-hidden">
-          <MarkdownRenderer content={message.content} />
+          <MarkdownRenderer content={message.content} showSyntaxHighlighting={showSyntaxHighlighting} />
 
           {/* Typing/Streaming cursor if streaming */}
           {isStreaming && (

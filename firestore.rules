@@ -1,0 +1,126 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidConversation(data, conversationId) {
+      return data.keys().hasAll(['id', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
+        data.keys().hasOnly(['id', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
+        data.id is string &&
+        data.id == conversationId &&
+        isValidId(data.id) &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.created_at is string &&
+        data.created_at.size() >= 10 &&
+        data.created_at.size() <= 64 &&
+        data.updated_at is string &&
+        data.updated_at.size() >= 10 &&
+        data.updated_at.size() <= 64 &&
+        data.running_summary is string &&
+        data.running_summary.size() <= 20000 &&
+        data.pinned is int &&
+        (data.pinned == 0 || data.pinned == 1);
+    }
+
+    function isValidMessage(data, conversationId, messageId) {
+      return data.keys().hasAll(['id', 'conversation_id', 'role', 'content', 'created_at', 'tokens']) &&
+        data.keys().hasOnly(['id', 'conversation_id', 'role', 'content', 'created_at', 'tokens']) &&
+        data.id is string &&
+        data.id == messageId &&
+        isValidId(data.id) &&
+        data.conversation_id is string &&
+        data.conversation_id == conversationId &&
+        isValidId(data.conversation_id) &&
+        data.role in ['user', 'assistant', 'system'] &&
+        data.content is string &&
+        data.content.size() >= 1 &&
+        data.content.size() <= 100000 &&
+        data.created_at is string &&
+        data.created_at.size() >= 10 &&
+        data.created_at.size() <= 64 &&
+        data.tokens is int &&
+        data.tokens >= 0 &&
+        data.tokens <= 1000000;
+    }
+
+    function isValidSettingKey(settingKey) {
+      return settingKey in [
+        'theme',
+        'typographyScale',
+        'sendOnEnter',
+        'streamResponses',
+        'showSyntaxHighlighting',
+        'language'
+      ];
+    }
+
+    function isValidSetting(data, settingKey) {
+      return isValidSettingKey(settingKey) &&
+        data.keys().hasAll(['key', 'value']) &&
+        data.keys().hasOnly(['key', 'value']) &&
+        data.key is string &&
+        data.key == settingKey &&
+        data.value is string &&
+        data.value.size() <= 100;
+    }
+
+    // Default-deny global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Health check document (read-only probe)
+    match /_health/connection {
+      allow get: if database is string;
+    }
+
+    // Conversations collection
+    match /conversations/{conversationId} {
+      allow get: if isValidId(conversationId);
+      allow list: if database is string;
+      allow create: if isValidId(conversationId) && isValidConversation(incoming(), conversationId);
+      allow update: if isValidId(conversationId) &&
+        isValidConversation(incoming(), conversationId) &&
+        incoming().id == existing().id &&
+        incoming().created_at == existing().created_at &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'pinned', 'running_summary', 'updated_at']);
+      allow delete: if isValidId(conversationId);
+
+      // Isolated messages subcollection per conversation
+      match /messages/{messageId} {
+        allow get: if isValidId(conversationId) && isValidId(messageId);
+        allow list: if isValidId(conversationId);
+        allow create: if isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isValidMessage(incoming(), conversationId, messageId) &&
+          exists(/databases/$(database)/documents/conversations/$(conversationId));
+        allow update: if false;
+        allow delete: if isValidId(conversationId) && isValidId(messageId);
+      }
+    }
+
+    // Persisted workspace settings
+    match /settings/{settingKey} {
+      allow get: if isValidSettingKey(settingKey);
+      allow list: if database is string;
+      allow create: if isValidSetting(incoming(), settingKey);
+      allow update: if isValidSetting(incoming(), settingKey) &&
+        incoming().key == existing().key &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['value']);
+      allow delete: if isValidSettingKey(settingKey);
+    }
+  }
+}

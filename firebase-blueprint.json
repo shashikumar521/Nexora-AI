@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "Conversation": {
+      "title": "Conversation",
+      "description": "An isolated Nexora AI chat conversation with metadata and progressive running summary.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique UUID of the conversation",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Display title of the conversation",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 creation timestamp"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 last-updated timestamp"
+        },
+        "running_summary": {
+          "type": "string",
+          "description": "Cumulative summary of turns older than the recent context window",
+          "maxLength": 20000
+        },
+        "pinned": {
+          "type": "integer",
+          "description": "Pin status (0 = unpinned, 1 = pinned)"
+        }
+      },
+      "required": ["id", "title", "created_at", "updated_at", "running_summary", "pinned"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A single conversational turn inside an isolated conversation.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique UUID of the message",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "description": "Parent conversation UUID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant", "system"],
+          "description": "Speaker role"
+        },
+        "content": {
+          "type": "string",
+          "description": "Message text content",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 creation timestamp"
+        },
+        "tokens": {
+          "type": "integer",
+          "description": "Approximate token count for the message"
+        }
+      },
+      "required": ["id", "conversation_id", "role", "content", "created_at", "tokens"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Persisted application preference key/value entry.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "enum": ["theme", "typographyScale", "sendOnEnter", "streamResponses", "showSyntaxHighlighting", "language"],
+          "description": "Preference key"
+        },
+        "value": {
+          "type": "string",
+          "description": "Stringified preference value",
+          "maxLength": 100
+        }
+      },
+      "required": ["key", "value"]
+    }
+  },
+  "firestore": {
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Stores isolated conversation metadata and cumulative running summaries."
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Stores ordered conversation messages isolated under their parent conversation."
+    },
+    "/settings/{settingKey}": {
+      "schema": { "$ref": "#/entities/Setting" },
+      "description": "Stores persisted application settings."
+    }
+  }
+}

@@ -31,6 +31,8 @@ export default function App() {
 
   // Modals & Drawers
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [focusSearchTrigger, setFocusSearchTrigger] = useState(0);
+  const [mobileNavMode, setMobileNavMode] = useState<'chat' | 'search' | 'history'>('chat');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -179,7 +181,7 @@ export default function App() {
       setMessages([]);
       setInputMessage('');
     } catch (e: any) {
-      setErrorBanner('Failed to create new conversation');
+      setErrorBanner(e?.message || 'Failed to create new conversation');
     }
   };
 
@@ -246,7 +248,8 @@ export default function App() {
         convId = newConv.id;
       } catch (err: any) {
         isSubmittingRef.current = false;
-        setErrorBanner('Failed to create conversation session. Please try again.');
+        setInputMessage(prompt);
+        setErrorBanner(err?.message || 'Failed to create conversation session. Please try again.');
         return;
       }
     }
@@ -269,47 +272,75 @@ export default function App() {
 
     let accumulatedText = '';
 
-    api.sendChatMessageStream(
-      convId,
-      prompt,
-      controller.signal,
-      (chunk) => {
-        accumulatedText += chunk;
-        setStreamingMessage(accumulatedText);
-      },
-      (meta) => {
+    if (settings.streamResponses) {
+      api.sendChatMessageStream(
+        convId,
+        prompt,
+        controller.signal,
+        (chunk) => {
+          accumulatedText += chunk;
+          setStreamingMessage(accumulatedText);
+        },
+        (meta) => {
+          setIsLoading(false);
+          isSubmittingRef.current = false;
+          setStreamingMessage('');
+          abortControllerRef.current = null;
+
+          if (accumulatedText.trim()) {
+            const assistantMsg: Message = {
+              id: meta.messageId || `msg-${Date.now()}`,
+              conversation_id: convId!,
+              role: 'assistant',
+              content: accumulatedText,
+              created_at: new Date().toISOString(),
+              model: meta.model || activeModel,
+              latencyMs: meta.latencyMs || 420,
+              tokens: meta.tokens || Math.round(accumulatedText.length / 4),
+            };
+            setMessages((prev) => [...prev, assistantMsg]);
+          }
+
+          loadConversations();
+          if (convId) loadMemoryStatus(convId);
+        },
+        (error) => {
+          setIsLoading(false);
+          isSubmittingRef.current = false;
+          setStreamingMessage('');
+          abortControllerRef.current = null;
+          setErrorBanner(error);
+          setLastFailedPrompt(prompt);
+        }
+      );
+    } else {
+      try {
+        const res = await api.sendChatMessage(convId, prompt, controller.signal);
         setIsLoading(false);
         isSubmittingRef.current = false;
-        setStreamingMessage('');
         abortControllerRef.current = null;
 
-        if (accumulatedText.trim()) {
-          const assistantMsg: Message = {
-            id: meta.messageId || `msg-${Date.now()}`,
-            conversation_id: convId!,
-            role: 'assistant',
-            content: accumulatedText,
-            created_at: new Date().toISOString(),
-            model: meta.model || activeModel,
-            latencyMs: meta.latencyMs || 420,
-            tokens: meta.tokens || Math.round(accumulatedText.length / 4),
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-        }
-
-        // Refresh conversation list & memory status
+        setMessages((prev) => [
+          ...prev,
+          {
+            ...res.assistantMessage,
+            model: res.model || activeModel,
+            latencyMs: res.latencyMs,
+            tokens: res.tokens,
+          },
+        ]);
         loadConversations();
         if (convId) loadMemoryStatus(convId);
-      },
-      (error) => {
+      } catch (err: any) {
         setIsLoading(false);
         isSubmittingRef.current = false;
-        setStreamingMessage('');
         abortControllerRef.current = null;
-        setErrorBanner(error);
-        setLastFailedPrompt(prompt);
+        if (err?.name !== 'AbortError') {
+          setErrorBanner(err?.message || 'Failed to generate response.');
+          setLastFailedPrompt(prompt);
+        }
       }
-    );
+    }
   };
 
   const handleStopStreaming = () => {
@@ -375,18 +406,25 @@ export default function App() {
     }
   };
 
-  const handleSaveSettings = async (newSettings: Partial<AppSettings>) => {
+  const handleSaveSettings = async (newSettings: Partial<AppSettings>): Promise<void> => {
+    const persisted = await api.updateSettings(newSettings);
+    setSettings((prev) => ({ ...prev, ...persisted }));
+    setErrorBanner(null);
+    setShareFeedback('Settings saved successfully.');
+    setTimeout(() => setShareFeedback(null), 3000);
+  };
+
+  const handleQuickToggleTheme = async () => {
     try {
-      await api.updateSettings(newSettings);
-      setSettings((prev) => ({ ...prev, ...newSettings }));
+      await handleSaveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' });
     } catch (e: any) {
-      setErrorBanner('Failed to save settings');
+      setErrorBanner(e?.message || 'Failed to save theme setting.');
     }
   };
 
   const handleExportTranscripts = (format: 'json' | 'markdown') => {
     if (messages.length === 0) {
-      alert('No messages to export in active conversation.');
+      setErrorBanner('No messages to export in active conversation.');
       return;
     }
 
@@ -440,8 +478,16 @@ export default function App() {
       ? 'text-base'
       : 'text-sm';
 
+  const activeMobileView: 'chat' | 'search' | 'history' | 'settings' = isSettingsOpen
+    ? 'settings'
+    : isSidebarOpen
+    ? mobileNavMode === 'search'
+      ? 'search'
+      : 'history'
+    : 'chat';
+
   return (
-    <div className={`flex h-screen w-screen overflow-hidden ${typographyClass}`}>
+    <div className={`flex h-[100dvh] w-full overflow-hidden ${typographyClass}`}>
       {/* Sidebar */}
       <Sidebar
         conversations={conversations}
@@ -454,14 +500,21 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenHelp={() => setIsHelpOpen(true)}
         isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
+        onClose={() => {
+          setIsSidebarOpen(false);
+          setMobileNavMode('chat');
+        }}
+        focusSearchTrigger={focusSearchTrigger}
       />
 
       {/* Main Conversation Canvas */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent relative min-w-0">
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-transparent relative min-w-0 pb-[calc(3.5625rem+env(safe-area-inset-bottom))] sm:pb-0">
         {/* Chat Header */}
         <ChatHeader
-          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          onToggleSidebar={() => {
+            setMobileNavMode('history');
+            setIsSidebarOpen(!isSidebarOpen);
+          }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenMemoryModal={() => setIsMemoryModalOpen(true)}
           onResetContext={handleResetContext}
@@ -469,23 +522,21 @@ export default function App() {
           onShare={handleShare}
           activeModelName={activeModel}
           theme={settings.theme}
-          onToggleTheme={() =>
-            handleSaveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
-          }
+          onToggleTheme={handleQuickToggleTheme}
           memoryStatus={memoryStatus}
         />
 
         {/* Floating Notification Feedback */}
         {shareFeedback && (
-          <div className="absolute top-18 right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1E293B] border border-[#6366F1]/40 text-xs text-white shadow-xl animate-in fade-in slide-in-from-top-2">
-            <Check className="w-4 h-4 text-emerald-400" />
+          <div className="absolute top-16 sm:top-18 right-3 sm:right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1E293B] border border-[#6366F1]/40 text-xs text-white shadow-xl animate-in fade-in slide-in-from-top-2">
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{shareFeedback}</span>
           </div>
         )}
 
         {/* Error Notification Banner with Retry */}
         {errorBanner && (
-          <div className="mx-2 sm:mx-4 mt-3 flex items-center justify-between p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-xs text-red-200 shadow-lg gap-2 flex-wrap sm:flex-nowrap">
+          <div className="mx-2.5 sm:mx-4 mt-2.5 sm:mt-3 flex items-center justify-between p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-xs text-red-200 shadow-lg gap-2 flex-wrap sm:flex-nowrap shrink-0">
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
               <span className="leading-relaxed break-words">{errorBanner}</span>
@@ -533,7 +584,7 @@ export default function App() {
         {/* Chat Message Stream / New Chat Home */}
         <div
           ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto px-2 sm:px-4 py-4 sm:py-6 flex flex-col min-w-0"
+          className="flex-1 overflow-y-auto overflow-x-hidden px-2 sm:px-4 py-3 sm:py-6 flex flex-col min-w-0"
         >
           {messages.length === 0 && !streamingMessage ? (
             <NewChatHome
@@ -541,7 +592,7 @@ export default function App() {
               activeModelName={activeModel}
             />
           ) : (
-            <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full min-w-0">
+            <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full min-w-0 pb-2">
               {messages.map((msg, idx) => {
                 const isLast = idx === messages.length - 1;
                 return (
@@ -553,6 +604,7 @@ export default function App() {
                     onSuggestedPrompt={(p) => handleSendMessage(p)}
                     suggestedPrompts={isLast && msg.role === 'assistant' ? suggestedFollowUps : []}
                     activeModelName={activeModel}
+                    showSyntaxHighlighting={settings.showSyntaxHighlighting}
                   />
                 );
               })}
@@ -571,6 +623,7 @@ export default function App() {
                   isStreaming={true}
                   onStopStreaming={handleStopStreaming}
                   activeModelName={activeModel}
+                  showSyntaxHighlighting={settings.showSyntaxHighlighting}
                 />
               )}
 
@@ -595,15 +648,32 @@ export default function App() {
           setInput={setInputMessage}
           onSend={() => handleSendMessage()}
           isLoading={isLoading}
+          sendOnEnter={settings.sendOnEnter}
         />
 
         {/* Mobile Navigation bar */}
         <MobileNav
-          activeView={isSettingsOpen ? 'settings' : 'chat'}
-          onSelectChat={() => setIsSettingsOpen(false)}
-          onOpenSearch={() => setIsSidebarOpen(true)}
-          onOpenHistory={() => setIsSidebarOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          activeView={activeMobileView}
+          onSelectChat={() => {
+            setIsSettingsOpen(false);
+            setIsSidebarOpen(false);
+            setMobileNavMode('chat');
+          }}
+          onOpenSearch={() => {
+            setIsSettingsOpen(false);
+            setMobileNavMode('search');
+            setIsSidebarOpen(true);
+            setFocusSearchTrigger((n) => n + 1);
+          }}
+          onOpenHistory={() => {
+            setIsSettingsOpen(false);
+            setMobileNavMode('history');
+            setIsSidebarOpen(true);
+          }}
+          onOpenSettings={() => {
+            setIsSidebarOpen(false);
+            setIsSettingsOpen(true);
+          }}
         />
       </div>
 
@@ -630,29 +700,29 @@ export default function App() {
 
       {/* Help & Feedback Modal */}
       {isHelpOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-[#0F172A] border border-white/10 rounded-2xl p-6 shadow-2xl text-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-[#0F172A] border border-white/10 rounded-2xl p-5 sm:p-6 shadow-2xl text-sm">
             <h3 className="font-display font-semibold text-lg text-white mb-2">Help & Feedback</h3>
             <p className="text-xs text-[#94A3B8] mb-4 leading-relaxed">
               Nexora AI is designed with persistent conversation memory, progressive running summaries, and state-of-the-art Google Gemini intelligence.
             </p>
             <div className="space-y-2 text-xs text-[#CBD5E1] bg-[#111827] p-3 rounded-xl border border-white/5 mb-4">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2 flex-wrap">
                 <span className="text-[#64748B]">Context Strategy</span>
-                <span className="font-mono text-[#818CF8]">Last 25 msgs + Running Summary</span>
+                <span className="font-mono text-[#818CF8]">Last 20 msgs + Running Summary</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2 flex-wrap">
                 <span className="text-[#64748B]">Configured AI Model</span>
                 <span className="font-mono text-white">{formatModelDisplayName(activeModel)}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2 flex-wrap">
                 <span className="text-[#64748B]">Persistent DB</span>
-                <span className="font-mono text-emerald-400">SQLite v3.44 (WAL)</span>
+                <span className="font-mono text-emerald-400">PostgreSQL</span>
               </div>
             </div>
             <button
               onClick={() => setIsHelpOpen(false)}
-              className="w-full py-2 rounded-xl bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white text-xs font-medium cursor-pointer"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#6366F1] to-[#8B5CF6] text-white text-xs font-medium cursor-pointer"
             >
               Got it
             </button>

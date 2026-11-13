@@ -2,6 +2,8 @@ import { GoogleGenAI } from '@google/genai';
 import { NEXORA_SYSTEM_PROMPT } from '../prompts/systemPrompt.ts';
 import { conversationQueries, messageQueries } from '../db/database.ts';
 
+export const RECENT_MESSAGE_WINDOW = 20;
+
 export const DEPRECATED_MODELS = [
   'gemini-1.5-flash',
   'gemini-1.5-pro',
@@ -41,19 +43,19 @@ const getGenAIClient = () => {
 };
 
 /**
- * Summarizes older messages when conversation history exceeds the 25-message window
+ * Summarizes older messages when conversation history exceeds the 20-message window
  */
 export async function updateRunningSummaryIfNeeded(conversationId: string): Promise<string> {
-  const conv = conversationQueries.getById(conversationId);
+  const conv = await conversationQueries.getById(conversationId);
   if (!conv) return '';
 
-  const totalCount = messageQueries.getCountByConversation(conversationId);
-  if (totalCount <= 25) {
+  const totalCount = await messageQueries.getCountByConversation(conversationId);
+  if (totalCount <= RECENT_MESSAGE_WINDOW) {
     return conv.running_summary || '';
   }
 
-  // Get older messages that fall outside the 25 most recent
-  const olderMessages = messageQueries.getOlderMessages(conversationId, 25);
+  // Get older messages that fall outside the 20 most recent
+  const olderMessages = await messageQueries.getOlderMessages(conversationId, RECENT_MESSAGE_WINDOW);
   if (olderMessages.length === 0) {
     return conv.running_summary || '';
   }
@@ -91,7 +93,7 @@ Provide the updated cumulative running summary:`;
 
     const newSummary = summaryResponse.text?.trim() || conv.running_summary || '';
     if (newSummary) {
-      conversationQueries.update(conversationId, { running_summary: newSummary });
+      await conversationQueries.update(conversationId, { running_summary: newSummary });
       return newSummary;
     }
   } catch (error) {
@@ -127,7 +129,7 @@ export async function generateConversationTitle(userMessage: string): Promise<st
 }
 
 /**
- * Construct the full context for Gemini (System instructions + Running Summary + Last 25 messages)
+ * Construct the full context for Gemini (System instructions + Running Summary + Last 20 messages)
  */
 export async function buildConversationContext(conversationId: string, newUserMessage?: string) {
   // 1. Check & update running summary if needed
@@ -139,8 +141,8 @@ export async function buildConversationContext(conversationId: string, newUserMe
     systemInstruction += `\n\n[CONVERSATION RUNNING SUMMARY OF EARLIER TURNS]\n${runningSummary}\n[END RUNNING SUMMARY]`;
   }
 
-  // 3. Retrieve up to 25 most recent messages in chronological order
-  const recentMessages = messageQueries.getRecentMessages(conversationId, 25);
+  // 3. Retrieve up to 20 most recent messages in chronological order
+  const recentMessages = await messageQueries.getRecentMessages(conversationId, RECENT_MESSAGE_WINDOW);
 
   // 4. Map DB messages to Gemini Content objects with strict role alternation
   const contents: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];

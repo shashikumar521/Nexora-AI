@@ -56,12 +56,12 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
   ];
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center max-w-3xl mx-auto px-4 py-8 select-none">
+    <div className="flex-1 flex flex-col items-center justify-start sm:justify-center w-full max-w-3xl mx-auto px-2.5 sm:px-4 py-4 sm:py-8 select-none min-w-0">
       {/* Luminous Neural Emblem */}
-      <div className="relative mb-6">
+      <div className="relative mb-4 sm:mb-6">
         <div className="absolute inset-0 rounded-full bg-[#6366F1]/20 blur-2xl animate-pulse" />
-        <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E1B4B] border border-[#6366F1]/40 flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.35)]">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-inner">
+        <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-[#1E293B] via-[#0F172A] to-[#1E1B4B] border border-[#6366F1]/40 flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.35)]">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-[#6366F1] to-[#8B5CF6] flex items-center justify-center shadow-inner">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -69,7 +69,7 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="w-6 h-6 text-white"
+              className="w-5 h-5 sm:w-6 sm:h-6 text-white"
             >
               <path d="M12 2a4 4 0 0 0-4 4v1a4 4 0 0 0-2 3.46v2.08a4 4 0 0 0 1 2.65V18a4 4 0 0 0 4 4h2a4 4 0 0 0 4-4v-2.81a4 4 0 0 0 1-2.65V10.46A4 4 0 0 0 16 7V6a4 4 0 0 0-4-4z" />
               <path d="M12 7v5" />
@@ -81,43 +81,44 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
       </div>
 
       {/* Powered by Pill */}
-      <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[#1E293B]/80 border border-[#6366F1]/30 text-xs text-[#CBD5E1] mb-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3 py-1.5 rounded-2xl sm:rounded-full bg-[#1E293B]/80 border border-[#6366F1]/30 text-[11px] sm:text-xs text-[#CBD5E1] mb-4 sm:mb-5 shadow-sm max-w-full text-center">
         <span className="flex items-center gap-1 text-[#FBBF24]">
-          <Zap className="w-3.5 h-3.5 fill-current" />
+          <Zap className="w-3.5 h-3.5 fill-current shrink-0" />
           <span className="font-medium text-[#F8FAFC]">
             Powered by Google {formatModelDisplayName(activeModelName)}
           </span>
         </span>
-        <span className="text-white/20">•</span>
+        <span className="text-white/20 hidden sm:inline">•</span>
         <span className="text-[#94A3B8]">Real-time Multi-turn Context</span>
       </div>
 
       {/* Hero Headings */}
-      <h1 className="font-display font-bold text-2xl sm:text-3xl text-white text-center tracking-tight mb-2">
+      <h1 className="font-display font-bold text-xl sm:text-3xl text-white text-center tracking-tight mb-1.5 sm:mb-2 px-1">
         What can I help you with today?
       </h1>
-      <p className="text-sm text-[#94A3B8] text-center mb-8 max-w-md">
+      <p className="text-xs sm:text-sm text-[#94A3B8] text-center mb-5 sm:mb-8 max-w-md px-2">
         Ask anything. Explore ideas. Learn something new.
       </p>
 
-      {/* 4 Suggestion Cards in 2x2 Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 w-full mb-6">
+      {/* 4 Suggestion Cards: Single-column on mobile, 2x2 grid on desktop */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5 w-full mb-5 sm:mb-6">
         {suggestions.map((item, idx) => {
           const Icon = item.icon;
           return (
             <button
               key={idx}
+              type="button"
               onClick={() => onSelectPrompt(item.prompt)}
-              className="flex items-start gap-3.5 p-4 rounded-xl bg-[#111827]/70 hover:bg-[#1F2937]/80 border border-white/5 hover:border-[#6366F1]/40 transition-all text-left group cursor-pointer shadow-sm hover:shadow-md"
+              className="flex items-start gap-3 sm:gap-3.5 p-3.5 sm:p-4 min-h-[68px] rounded-xl bg-[#111827]/75 hover:bg-[#1F2937]/80 border border-white/5 hover:border-[#6366F1]/40 transition-all text-left group cursor-pointer shadow-sm hover:shadow-md active:scale-[0.99] w-full min-w-0"
             >
-              <div className="w-8 h-8 rounded-lg bg-[#1E293B] group-hover:bg-[#6366F1]/20 border border-white/10 group-hover:border-[#6366F1]/40 flex items-center justify-center shrink-0 transition-colors">
+              <div className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg bg-[#1E293B] group-hover:bg-[#6366F1]/20 border border-white/10 group-hover:border-[#6366F1]/40 flex items-center justify-center shrink-0 transition-colors">
                 <Icon className="w-4 h-4 text-[#818CF8]" />
               </div>
-              <div>
+              <div className="min-w-0 flex-1">
                 <h3 className="font-display font-semibold text-sm text-[#F8FAFC] group-hover:text-white transition-colors">
                   {item.title}
                 </h3>
-                <p className="text-xs text-[#94A3B8] line-clamp-2 mt-0.5 leading-relaxed">
+                <p className="text-xs text-[#94A3B8] line-clamp-2 mt-0.5 leading-relaxed break-words">
                   {item.description}
                 </p>
               </div>
@@ -127,17 +128,18 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
       </div>
 
       {/* Quick Modes */}
-      <div className="flex items-center justify-center flex-wrap gap-2 mb-6">
-        <span className="text-xs text-[#64748B] mr-1">Quick modes:</span>
+      <div className="flex items-center justify-center flex-wrap gap-2 mb-5 sm:mb-6 w-full">
+        <span className="text-xs text-[#64748B] mr-0.5 w-full sm:w-auto text-center">Quick modes:</span>
         {quickModes.map((mode, idx) => {
           const Icon = mode.icon;
           return (
             <button
               key={idx}
+              type="button"
               onClick={() => onSelectPrompt(mode.prompt)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/10 hover:border-[#6366F1]/30 text-xs text-[#CBD5E1] hover:text-white transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[38px] sm:min-h-0 rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/10 hover:border-[#6366F1]/30 text-xs text-[#CBD5E1] hover:text-white transition-all cursor-pointer active:scale-[0.98]"
             >
-              <Icon className="w-3.5 h-3.5 text-[#818CF8]" />
+              <Icon className="w-3.5 h-3.5 text-[#818CF8] shrink-0" />
               <span>{mode.label}</span>
             </button>
           );
@@ -145,15 +147,15 @@ export const NewChatHome: React.FC<NewChatHomeProps> = ({ onSelectPrompt, active
       </div>
 
       {/* Active Context Status Banner */}
-      <div className="w-full p-3.5 rounded-xl bg-[#111827]/60 border border-white/10 flex items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2.5">
-          <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0" />
-          <span className="text-[#CBD5E1]">
+      <div className="w-full p-3.5 rounded-xl bg-[#111827]/60 border border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 sm:gap-3 text-xs">
+        <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+          <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse shrink-0 mt-1 sm:mt-0" />
+          <span className="text-[#CBD5E1] leading-relaxed break-words">
             <strong className="text-white font-medium">Active Context:</strong> Conversation memory
-            automatically retains up to 25 messages with progressive real-time summarization.
+            automatically retains up to 20 messages with progressive real-time summarization.
           </span>
         </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1F2937] text-[11px] font-mono text-[#38BDF8] border border-white/5 shrink-0">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#1F2937] text-[11px] font-mono text-[#38BDF8] border border-white/5 shrink-0 self-end sm:self-center">
           <Cpu className="w-3 h-3" />
           <span>Ready</span>
         </div>

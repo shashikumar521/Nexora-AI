@@ -4,16 +4,20 @@ import {
   conversationQueries,
   messageQueries,
   settingsQueries,
-  db,
+  testDatabaseConnection,
+  getDatabaseProviderName,
 } from '../db/database.ts';
 import {
   generateChatResponse,
   streamChatResponse,
   generateConversationTitle,
   getActiveModel,
+  RECENT_MESSAGE_WINDOW,
 } from '../services/gemini.ts';
 
 export const apiRouter = Router();
+
+const VALID_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 
 // Basic rate limiting middleware (in-memory token bucket per IP)
 const ipRequestCounts = new Map<string, { count: number; resetTime: number }>();
@@ -23,6 +27,11 @@ const MAX_REQUESTS_PER_WINDOW = 60; // 60 requests per minute
 function rateLimiter(req: Request, res: Response, next: NextFunction) {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
+  if (ipRequestCounts.size > 1000) {
+    for (const [k, v] of ipRequestCounts.entries()) {
+      if (now > v.resetTime) ipRequestCounts.delete(k);
+    }
+  }
   const record = ipRequestCounts.get(ip);
 
   if (!record || now > record.resetTime) {
@@ -42,186 +51,8 @@ function rateLimiter(req: Request, res: Response, next: NextFunction) {
 
 apiRouter.use(rateLimiter);
 
-/**
- * GET /api/health
- */
-apiRouter.get('/health', (req: Request, res: Response) => {
-  const key = process.env.GEMINI_API_KEY || '';
-  const hasKey = Boolean(key && key.trim() && key !== 'MY_GEMINI_API_KEY');
-  res.json({
-    status: 'ok',
-    app: 'Nexora AI',
-    version: '1.0.0',
-    model: getActiveModel(),
-    apiKeyConfigured: hasKey,
-    database: 'connected (SQLite)',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-apiRouter.get('/models', async (req: Request, res: Response) => {
-  try {
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-    });
-    const list = await ai.models.list();
-    const modelNames = [];
-    for await (const m of list) {
-      modelNames.push(m.name);
-    }
-    res.json({ models: modelNames });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * GET /api/conversations
- * Retrieve conversation history with optional search
- */
-apiRouter.get('/conversations', (req: Request, res: Response) => {
-  try {
-    const search = req.query.search as string | undefined;
-    const conversations = conversationQueries.getAll(search);
-    res.json({ conversations });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to retrieve conversations', details: error.message });
-  }
-});
-
-/**
- * POST /api/conversations
- * Create a new conversation
- */
-apiRouter.post('/conversations', (req: Request, res: Response) => {
-  try {
-    const id = randomUUID();
-    const title = req.body?.title?.trim() || 'New Chat';
-    const conversation = conversationQueries.create(id, title);
-    res.status(201).json({ conversation });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to create conversation', details: error.message });
-  }
-});
-
-/**
- * GET /api/conversations/:id
- * Retrieve a conversation and all its messages
- */
-apiRouter.get('/conversations/:id', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const conversation = conversationQueries.getById(id);
-    if (!conversation) {
-      return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    const messages = messageQueries.getByConversation(id);
-    res.json({ conversation, messages });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to retrieve conversation', details: error.message });
-  }
-});
-
-/**
- * PATCH /api/conversations/:id
- * Update title or pinned status
- */
-apiRouter.patch('/conversations/:id', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { title, pinned } = req.body;
-
-    const existing = conversationQueries.getById(id);
-    if (!existing) {
-      return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    const updated = conversationQueries.update(id, {
-      title: typeof title === 'string' ? title.trim() : undefined,
-      pinned: typeof pinned === 'boolean' ? pinned : undefined,
-    });
-
-    res.json({ conversation: updated });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to update conversation', details: error.message });
-  }
-});
-
-/**
- * DELETE /api/conversations/:id
- * Delete a conversation and its messages
- */
-apiRouter.delete('/conversations/:id', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const existing = conversationQueries.getById(id);
-    if (!existing) {
-      return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    conversationQueries.delete(id);
-    res.json({ success: true, id });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to delete conversation', details: error.message });
-  }
-});
-
-/**
- * GET /api/conversations/:id/memory
- * Retrieve memory status and summary metadata for a conversation
- */
-apiRouter.get('/conversations/:id/memory', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const conversation = conversationQueries.getById(id);
-    if (!conversation) {
-      return res.status(404).json({ error: 'Conversation not found' });
-    }
-
-    const totalMessages = messageQueries.getCountByConversation(id);
-    const recentMessages = messageQueries.getRecentMessages(id, 25);
-
-    // Calculate approximate tokens for active context window
-    const recentTokens = recentMessages.reduce((sum, m) => sum + (m.tokens || Math.round(m.content.length / 4)), 0);
-    const summaryTokens = Math.round((conversation.running_summary?.length || 0) / 4);
-    const totalActiveTokens = recentTokens + summaryTokens;
-
-    res.json({
-      conversationId: id,
-      strategy: 'Last 25 messages + cumulative running summary',
-      totalStoredMessages: totalMessages,
-      recentMessagesCount: recentMessages.length,
-      maxRecentWindow: 25,
-      hasRunningSummary: Boolean(conversation.running_summary && conversation.running_summary.trim()),
-      runningSummary: conversation.running_summary || null,
-      activeContextTokens: totalActiveTokens,
-      tokenCapacity: 1000000, // 1M tokens capacity
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to retrieve memory status', details: error.message });
-  }
-});
-
-/**
- * POST /api/conversations/:id/clear
- * Clear all messages in conversation
- */
-apiRouter.post('/conversations/:id/clear', (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    messageQueries.deleteByConversation(id);
-    conversationQueries.update(id, { running_summary: '' });
-    res.json({ success: true, message: 'Conversation context reset successfully' });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to reset context', details: error.message });
-  }
-});
-
 function sanitizeErrorMessage(err: any): string {
-  if (!err) return 'An error occurred while communicating with Gemini API.';
+  if (!err) return 'An unexpected server error occurred.';
   const msg = typeof err === 'string' ? err : err.message || '';
   const status = err.status || err.code;
 
@@ -229,7 +60,7 @@ function sanitizeErrorMessage(err: any): string {
     return 'Gemini API rate limit exceeded. Please wait a moment and try again.';
   }
   if (status === 403 || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
-    return 'Permission denied. Please check your Gemini API key in AI Studio Secrets.';
+    return 'Permission denied. Please check your Gemini API key or database permissions.';
   }
   if (msg.includes('Timeout') || msg.includes('timed out')) {
     return 'Request timed out waiting for the AI model to respond. Please try again.';
@@ -238,15 +69,251 @@ function sanitizeErrorMessage(err: any): string {
     return 'The AI model is currently busy. Please retry in a few moments.';
   }
 
-  // Strip any API keys, URLs, or internal filesystem paths
+  // Strip any API keys, database URLs, URLs, or internal filesystem paths
   const clean = msg
     .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
+    .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DATABASE_URL]')
     .replace(/key=[^&\s]+/gi, 'key=[REDACTED]')
     .replace(/https?:\/\/[^\s]+/g, '[REDACTED_URL]')
     .replace(/\/app\/[^\s:]+/g, '[INTERNAL_PATH]');
 
-  return clean.trim() || 'An error occurred while generating the response from Gemini.';
+  return clean.trim() || 'An error occurred while processing your request.';
 }
+
+function getDbErrorStatus(err: unknown): number {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  if (
+    msg.includes('DATABASE_URL') ||
+    msg.includes('Database connection failed') ||
+    msg.includes('timed out')
+  ) {
+    return 503;
+  }
+  return 500;
+}
+
+/**
+ * GET /api/health
+ */
+apiRouter.get('/health', async (_req: Request, res: Response) => {
+  const key = process.env.GEMINI_API_KEY || '';
+  const hasKey = Boolean(key && key.trim() && key !== 'MY_GEMINI_API_KEY');
+  const provider = getDatabaseProviderName();
+  const dbCheck = await testDatabaseConnection();
+
+  res.status(dbCheck.ok ? 200 : 503).json({
+    status: dbCheck.ok ? 'ok' : 'degraded',
+    app: 'Nexora AI',
+    version: '1.0.0',
+    model: getActiveModel(),
+    apiKeyConfigured: hasKey,
+    database: dbCheck.ok ? `connected (${provider})` : 'unavailable',
+    ...(dbCheck.ok ? {} : { databaseError: dbCheck.error || 'Database unavailable' }),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+apiRouter.get('/models', async (_req: Request, res: Response) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured in backend environment.' });
+    }
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+    const list = await ai.models.list();
+    const modelNames: string[] = [];
+    for await (const m of list) {
+      if (m.name) modelNames.push(m.name);
+    }
+    res.json({ models: modelNames });
+  } catch (err: any) {
+    console.error('[API] Failed to list models:', err?.message || err);
+    res.status(500).json({ error: sanitizeErrorMessage(err) });
+  }
+});
+
+/**
+ * GET /api/conversations
+ * Retrieve conversation history with optional search
+ */
+apiRouter.get('/conversations', async (req: Request, res: Response) => {
+  try {
+    const search = req.query.search as string | undefined;
+    const conversations = await conversationQueries.getAll(search);
+    res.json({ conversations });
+  } catch (error: any) {
+    console.error('[API] GET /conversations failed:', error);
+    const status = getDbErrorStatus(error);
+    res.status(status).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve conversations.' });
+  }
+});
+
+/**
+ * POST /api/conversations
+ * Create a new conversation
+ */
+apiRouter.post('/conversations', async (req: Request, res: Response) => {
+  try {
+    const id = randomUUID();
+    const rawTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const title = (rawTitle || 'New Chat').slice(0, 200);
+    const conversation = await conversationQueries.create(id, title);
+    if (!conversation?.id) {
+      return res.status(500).json({ error: 'Database did not confirm conversation creation.' });
+    }
+    res.status(201).json({ conversation });
+  } catch (error: any) {
+    console.error('[API] POST /conversations failed:', error);
+    const status = getDbErrorStatus(error);
+    res.status(status).json({
+      error: sanitizeErrorMessage(error) || 'Failed to create conversation session in persistent storage.',
+    });
+  }
+});
+
+/**
+ * GET /api/conversations/:id
+ * Retrieve a conversation and all its messages
+ */
+apiRouter.get('/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+    const conversation = await conversationQueries.getById(id);
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const messages = await messageQueries.getByConversation(id);
+    res.json({ conversation, messages });
+  } catch (error: any) {
+    console.error('[API] GET /conversations/:id failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve conversation.' });
+  }
+});
+
+/**
+ * PATCH /api/conversations/:id
+ * Update title or pinned status
+ */
+apiRouter.patch('/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+    const { title, pinned } = req.body || {};
+
+    const existing = await conversationQueries.getById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const updated = await conversationQueries.update(id, {
+      title: typeof title === 'string' && title.trim() ? title.trim() : undefined,
+      pinned: typeof pinned === 'boolean' ? pinned : undefined,
+    });
+
+    res.json({ conversation: updated });
+  } catch (error: any) {
+    console.error('[API] PATCH /conversations/:id failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to update conversation.' });
+  }
+});
+
+/**
+ * DELETE /api/conversations/:id
+ * Delete a conversation and its messages
+ */
+apiRouter.delete('/conversations/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+    const existing = await conversationQueries.getById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    await conversationQueries.delete(id);
+    res.json({ success: true, id });
+  } catch (error: any) {
+    console.error('[API] DELETE /conversations/:id failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to delete conversation.' });
+  }
+});
+
+/**
+ * GET /api/conversations/:id/memory
+ * Retrieve memory status and summary metadata for a conversation
+ */
+apiRouter.get('/conversations/:id/memory', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+    const conversation = await conversationQueries.getById(id);
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const totalMessages = await messageQueries.getCountByConversation(id);
+    const recentMessages = await messageQueries.getRecentMessages(id, RECENT_MESSAGE_WINDOW);
+
+    // Calculate approximate tokens for active context window
+    const recentTokens = recentMessages.reduce(
+      (sum, m) => sum + (m.tokens || Math.round(m.content.length / 4)),
+      0
+    );
+    const summaryTokens = Math.round((conversation.running_summary?.length || 0) / 4);
+    const totalActiveTokens = recentTokens + summaryTokens;
+
+    res.json({
+      conversationId: id,
+      strategy: `Last ${RECENT_MESSAGE_WINDOW} messages + cumulative running summary`,
+      totalStoredMessages: totalMessages,
+      recentMessagesCount: recentMessages.length,
+      maxRecentWindow: RECENT_MESSAGE_WINDOW,
+      hasRunningSummary: Boolean(conversation.running_summary && conversation.running_summary.trim()),
+      runningSummary: conversation.running_summary || null,
+      activeContextTokens: totalActiveTokens,
+      tokenCapacity: 1000000, // 1M tokens capacity
+    });
+  } catch (error: any) {
+    console.error('[API] GET /conversations/:id/memory failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to retrieve memory status.' });
+  }
+});
+
+/**
+ * POST /api/conversations/:id/clear
+ * Clear all messages in conversation
+ */
+apiRouter.post('/conversations/:id/clear', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+    const existing = await conversationQueries.getById(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    await messageQueries.deleteByConversation(id);
+    await conversationQueries.update(id, { running_summary: '' });
+    res.json({ success: true, message: 'Conversation context reset successfully' });
+  } catch (error: any) {
+    console.error('[API] POST /conversations/:id/clear failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to reset conversation context.' });
+  }
+});
 
 /**
  * POST /api/chat/:id
@@ -254,7 +321,11 @@ function sanitizeErrorMessage(err: any): string {
  */
 apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
   const { id } = req.params;
-  const { message, stream = true } = req.body;
+  if (!VALID_ID_REGEX.test(id)) {
+    return res.status(400).json({ error: 'Invalid conversation ID format.' });
+  }
+
+  const { message, stream = true } = req.body || {};
 
   // Validation
   if (!message || typeof message !== 'string' || !message.trim()) {
@@ -265,124 +336,119 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Message exceeds maximum allowed length of 4,096 characters.' });
   }
 
-  // Ensure conversation exists or create it
-  let conversation = conversationQueries.getById(id);
-  if (!conversation) {
-    conversation = conversationQueries.create(id, 'New Chat');
-  }
-
-  // Check API key
+  // Check API key before mutating DB
   if (!process.env.GEMINI_API_KEY) {
     return res.status(500).json({
-      error: 'GEMINI_API_KEY is not configured in backend environment. Please check the Secrets panel in AI Studio.',
+      error: 'GEMINI_API_KEY is not configured in backend environment. Please check your deployment environment variables.',
     });
   }
 
-  const userMsgId = randomUUID();
-  const userTokens = Math.round(message.length / 4);
+  try {
+    // Ensure conversation exists or create it
+    let conversation = await conversationQueries.getById(id);
+    if (!conversation) {
+      conversation = await conversationQueries.create(id, 'New Chat');
+    }
 
-  // Store user message
-  messageQueries.create(userMsgId, id, 'user', message.trim(), userTokens);
+    const userMsgId = randomUUID();
+    const userTokens = Math.round(message.trim().length / 4);
 
-  // Auto-generate title if this is the very first turn and title is still "New Chat"
-  const totalCount = messageQueries.getCountByConversation(id);
-  if (totalCount <= 2 && (conversation?.title === 'New Chat' || conversation?.title === 'New Conversation')) {
-    generateConversationTitle(message.trim()).then((autoTitle) => {
-      conversationQueries.update(id, { title: autoTitle });
-    }).catch(() => {});
-  }
+    // Store user message
+    await messageQueries.create(userMsgId, id, 'user', message.trim(), userTokens);
 
-  console.log(`[API] Received chat request for convId: ${id}, message: "${message.slice(0, 30)}..."`);
-  // Handle Streaming vs JSON
-  if (stream) {
-    // Setup SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
+    // Auto-generate title if this is the very first turn and title is still "New Chat"
+    const totalCount = await messageQueries.getCountByConversation(id);
+    if (
+      totalCount <= 2 &&
+      (conversation?.title === 'New Chat' || conversation?.title === 'New Conversation')
+    ) {
+      generateConversationTitle(message.trim())
+        .then((autoTitle) => conversationQueries.update(id, { title: autoTitle }))
+        .catch(() => {});
+    }
 
-    try {
-      const assistantMsgId = randomUUID();
-      console.log(`[API] Starting streamChatResponse...`);
+    console.log(`[API] Received chat request for convId: ${id}`);
 
-      const result = await streamChatResponse(id, message.trim(), (chunkText) => {
-        res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunkText })}\n\n`);
-      });
+    if (stream) {
+      // Setup SSE headers
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
 
-      console.log(`[API] streamChatResponse completed. Length: ${result.text.length}`);
+      try {
+        const assistantMsgId = randomUUID();
+        const result = await streamChatResponse(id, message.trim(), (chunkText) => {
+          res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunkText })}\n\n`);
+        });
 
-      // Save assistant message to database
-      messageQueries.create(
-        assistantMsgId,
-        id,
-        'assistant',
-        result.text,
-        result.tokens
-      );
+        await messageQueries.create(
+          assistantMsgId,
+          id,
+          'assistant',
+          result.text,
+          result.tokens
+        );
 
-      // Send completion event
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'done',
+            messageId: assistantMsgId,
+            model: result.model,
+            latencyMs: result.latencyMs,
+            tokens: result.tokens,
+            runningSummary: result.runningSummary,
+          })}\n\n`
+        );
+        res.end();
+      } catch (err: any) {
+        console.error('[API] Streaming error in chat route:', err?.message || err);
+        try {
+          await messageQueries.deleteById(id, userMsgId);
+        } catch (cleanErr) {
+          console.warn('[API] Could not clean up failed user message:', cleanErr);
+        }
 
-      res.write(
-        `data: ${JSON.stringify({
-          type: 'done',
-          messageId: assistantMsgId,
+        const errorMessage = sanitizeErrorMessage(err);
+        res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
+        res.end();
+      }
+    } else {
+      try {
+        const result = await generateChatResponse(id, message.trim());
+        const assistantMsgId = randomUUID();
+
+        const savedAssistant = await messageQueries.create(
+          assistantMsgId,
+          id,
+          'assistant',
+          result.text,
+          result.tokens
+        );
+
+        res.json({
+          userMessage: { id: userMsgId, role: 'user', content: message.trim() },
+          assistantMessage: savedAssistant,
           model: result.model,
           latencyMs: result.latencyMs,
           tokens: result.tokens,
           runningSummary: result.runningSummary,
-        })}\n\n`
-      );
-      res.end();
-    } catch (err: any) {
-      console.error('[API] Streaming error in chat route:', err?.message || err);
-      // Remove unanswered user message so failed turn leaves no corrupt or orphan entry in SQLite
-      try {
-        db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId);
-      } catch (cleanErr) {
-        console.warn('[API] Could not clean up failed user message:', cleanErr);
+        });
+      } catch (err: any) {
+        console.error('[API] Error generating chat response:', err?.message || err);
+        try {
+          await messageQueries.deleteById(id, userMsgId);
+        } catch (cleanErr) {
+          console.warn('[API] Could not clean up failed user message:', cleanErr);
+        }
+
+        const errorMessage = sanitizeErrorMessage(err);
+        res.status(500).json({ error: errorMessage });
       }
-
-      const errorMessage = sanitizeErrorMessage(err);
-      res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
-      res.end();
     }
-  } else {
-    // Non-streaming standard response
-    try {
-      console.log(`[API] Calling generateChatResponse...`);
-      const result = await generateChatResponse(id, message.trim());
-      console.log(`[API] generateChatResponse returned! Model: ${result.model}`);
-      const assistantMsgId = randomUUID();
-
-      // Store assistant message
-      const savedAssistant = messageQueries.create(
-        assistantMsgId,
-        id,
-        'assistant',
-        result.text,
-        result.tokens
-      );
-
-      res.json({
-        userMessage: { id: userMsgId, role: 'user', content: message.trim() },
-        assistantMessage: savedAssistant,
-        model: result.model,
-        latencyMs: result.latencyMs,
-        tokens: result.tokens,
-        runningSummary: result.runningSummary,
-      });
-    } catch (err: any) {
-      console.error('[API] Error generating chat response:', err?.message || err);
-      // Remove unanswered user message so failed turn leaves no corrupt or orphan entry in SQLite
-      try {
-        db.prepare('DELETE FROM messages WHERE id = ?').run(userMsgId);
-      } catch (cleanErr) {
-        console.warn('[API] Could not clean up failed user message:', cleanErr);
-      }
-
-      const errorMessage = sanitizeErrorMessage(err);
-      res.status(500).json({ error: errorMessage });
-    }
+  } catch (err: any) {
+    console.error('[API] POST /chat/:id setup failed:', err);
+    res.status(getDbErrorStatus(err)).json({ error: sanitizeErrorMessage(err) });
   }
 });
 
@@ -393,7 +459,11 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
 apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const messages = messageQueries.getByConversation(id);
+    if (!VALID_ID_REGEX.test(id)) {
+      return res.status(400).json({ error: 'Invalid conversation ID format.' });
+    }
+
+    const messages = await messageQueries.getByConversation(id);
     if (messages.length === 0) {
       return res.status(400).json({ error: 'No messages to regenerate' });
     }
@@ -402,11 +472,9 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
     let promptMsg = lastMsg;
 
     if (lastMsg.role === 'assistant') {
-      // Delete last assistant message
-      db.prepare('DELETE FROM messages WHERE id = ?').run(lastMsg.id);
+      await messageQueries.deleteById(id, lastMsg.id);
 
-      // Find the user prompt right before it
-      const remaining = messageQueries.getByConversation(id);
+      const remaining = await messageQueries.getByConversation(id);
       if (remaining.length === 0) {
         return res.status(400).json({ error: 'No user prompt found to regenerate' });
       }
@@ -415,7 +483,7 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
 
     const result = await generateChatResponse(id, promptMsg.content);
     const newAssistantId = randomUUID();
-    const savedAssistant = messageQueries.create(
+    const savedAssistant = await messageQueries.create(
       newAssistantId,
       id,
       'assistant',
@@ -430,44 +498,85 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
       tokens: result.tokens,
     });
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to regenerate response', details: error.message });
+    console.error('[API] POST /conversations/:id/regenerate failed:', error);
+    res.status(500).json({ error: sanitizeErrorMessage(error) });
   }
 });
 
 /**
  * GET & PUT /api/settings
- * Manage user preferences persisted in SQLite
+ * Manage user preferences persisted in Cloud Firestore
  */
-apiRouter.get('/settings', (req: Request, res: Response) => {
+const VALID_THEMES = new Set(['dark', 'light', 'system']);
+const VALID_SCALES = new Set(['12px', '14px', '16px']);
+
+function formatSettingsResponse(settings: Record<string, string>) {
+  return {
+    theme: (VALID_THEMES.has(settings['theme']) ? settings['theme'] : 'dark') as 'dark' | 'light' | 'system',
+    typographyScale: (VALID_SCALES.has(settings['typographyScale']) ? settings['typographyScale'] : '14px') as '12px' | '14px' | '16px',
+    sendOnEnter: settings['sendOnEnter'] !== 'false',
+    streamResponses: settings['streamResponses'] !== 'false',
+    showSyntaxHighlighting: settings['showSyntaxHighlighting'] !== 'false',
+    language: settings['language'] || 'en-US',
+    model: getActiveModel(),
+  };
+}
+
+apiRouter.get('/settings', async (_req: Request, res: Response) => {
   try {
-    const settings = settingsQueries.getAll();
-    res.json({
-      theme: settings['theme'] || 'dark',
-      typographyScale: settings['typographyScale'] || '14px',
-      sendOnEnter: settings['sendOnEnter'] !== 'false',
-      streamResponses: settings['streamResponses'] !== 'false',
-      showSyntaxHighlighting: settings['showSyntaxHighlighting'] !== 'false',
-      language: settings['language'] || 'en-US',
-      model: getActiveModel(),
-    });
+    const settings = await settingsQueries.getAll();
+    res.json(formatSettingsResponse(settings));
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to read settings', details: error.message });
+    console.error('[API] GET /settings failed:', error);
+    const status = getDbErrorStatus(error);
+    res.status(status).json({
+      error: sanitizeErrorMessage(error) || 'Failed to load settings from persistent storage.',
+    });
   }
 });
 
-apiRouter.put('/settings', (req: Request, res: Response) => {
+apiRouter.put('/settings', async (req: Request, res: Response) => {
   try {
-    const body = req.body || {};
-    if (body.theme !== undefined) settingsQueries.set('theme', body.theme);
-    if (body.typographyScale !== undefined) settingsQueries.set('typographyScale', body.typographyScale);
-    if (body.sendOnEnter !== undefined) settingsQueries.set('sendOnEnter', String(body.sendOnEnter));
-    if (body.streamResponses !== undefined) settingsQueries.set('streamResponses', String(body.streamResponses));
-    if (body.showSyntaxHighlighting !== undefined) settingsQueries.set('showSyntaxHighlighting', String(body.showSyntaxHighlighting));
-    if (body.language !== undefined) settingsQueries.set('language', body.language);
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Invalid settings payload.' });
+    }
 
-    res.json({ success: true, settings: settingsQueries.getAll() });
+    if (body.theme !== undefined) {
+      if (!VALID_THEMES.has(String(body.theme))) {
+        return res.status(400).json({ error: 'Invalid theme value.' });
+      }
+      await settingsQueries.set('theme', String(body.theme));
+    }
+    if (body.typographyScale !== undefined) {
+      if (!VALID_SCALES.has(String(body.typographyScale))) {
+        return res.status(400).json({ error: 'Invalid typography scale value.' });
+      }
+      await settingsQueries.set('typographyScale', String(body.typographyScale));
+    }
+    if (body.sendOnEnter !== undefined) {
+      await settingsQueries.set('sendOnEnter', String(Boolean(body.sendOnEnter)));
+    }
+    if (body.streamResponses !== undefined) {
+      await settingsQueries.set('streamResponses', String(Boolean(body.streamResponses)));
+    }
+    if (body.showSyntaxHighlighting !== undefined) {
+      await settingsQueries.set('showSyntaxHighlighting', String(Boolean(body.showSyntaxHighlighting)));
+    }
+    if (body.language !== undefined) {
+      const lang = String(body.language).trim().slice(0, 32);
+      if (!lang) {
+        return res.status(400).json({ error: 'Invalid language value.' });
+      }
+      await settingsQueries.set('language', lang);
+    }
+
+    const updated = await settingsQueries.getAll();
+    res.json({ success: true, settings: formatSettingsResponse(updated) });
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to save settings', details: error.message });
+    console.error('[API] PUT /settings failed:', error);
+    const status = getDbErrorStatus(error);
+    res.status(status).json({ error: sanitizeErrorMessage(error) || 'Failed to persist settings.' });
   }
 });
 
@@ -475,11 +584,12 @@ apiRouter.put('/settings', (req: Request, res: Response) => {
  * DELETE /api/data/clear
  * Irreversible wipe of all conversations and messages
  */
-apiRouter.delete('/data/clear', (req: Request, res: Response) => {
+apiRouter.delete('/data/clear', async (_req: Request, res: Response) => {
   try {
-    conversationQueries.clearAll();
+    await conversationQueries.clearAll();
     res.json({ success: true, message: 'All workspace data cleared successfully' });
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to clear workspace data', details: error.message });
+    console.error('[API] DELETE /data/clear failed:', error);
+    res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to clear workspace data.' });
   }
 });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Conversation } from '../types';
 import { NexoraLogo } from './NexoraLogo';
 import {
@@ -28,6 +28,7 @@ interface SidebarProps {
   onOpenHelp: () => void;
   isOpen: boolean;
   onClose: () => void;
+  focusSearchTrigger?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -42,12 +43,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenHelp,
   isOpen,
   onClose,
+  focusSearchTrigger = 0,
 }) => {
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen && focusSearchTrigger > 0) {
+      const timer = setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, focusSearchTrigger]);
 
   // Filter conversations
   const filtered = conversations.filter((c) =>
@@ -99,13 +111,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {isOpen && (
         <div
           onClick={onClose}
-          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 lg:hidden"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[55] lg:hidden"
         />
       )}
 
       {/* Sidebar Drawer */}
       <aside
-        className={`fixed lg:static top-0 bottom-0 left-0 z-50 w-72 bg-[#0E1524] border-r border-white/5 flex flex-col transition-transform duration-300 ease-in-out ${
+        className={`fixed lg:static top-0 bottom-0 left-0 z-[60] w-72 max-w-[85vw] bg-[#0E1524] border-r border-white/5 flex flex-col pb-[env(safe-area-inset-bottom)] lg:pb-0 transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
@@ -145,11 +157,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="relative flex items-center">
             <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-3 pointer-events-none" />
             <input
+              ref={searchInputRef}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search conversations..."
-              className="w-full bg-[#111827] text-xs text-[#E2E8F0] placeholder-[#64748B] pl-9 pr-7 py-2 rounded-xl border border-white/5 focus:outline-none focus:border-[#6366F1]/50 transition-colors"
+              className="w-full bg-[#111827] text-xs text-[#E2E8F0] placeholder-[#64748B] pl-9 pr-7 py-2.5 sm:py-2 rounded-xl border border-white/5 focus:outline-none focus:border-[#6366F1]/50 transition-colors"
             />
             {search && (
               <button
@@ -334,7 +347,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </span>
               </div>
               <span className="text-[11px] text-[#64748B] block truncate">
-                Local Session • SQLite
+                Workspace • PostgreSQL
               </span>
             </div>
           </div>

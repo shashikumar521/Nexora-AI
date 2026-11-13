@@ -18,7 +18,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
   if (!isOpen) return null;
 
   const recentCount = memoryStatus?.recentMessagesCount || 0;
-  const maxRecent = memoryStatus?.maxRecentWindow || 25;
+  const maxRecent = memoryStatus?.maxRecentWindow || 20;
   const totalCount = memoryStatus?.totalStoredMessages || 0;
   const hasSummary = memoryStatus?.hasRunningSummary || false;
   const summary = memoryStatus?.runningSummary || '';
@@ -27,8 +27,8 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
   const percentUsed = Math.min(100, Math.max(0.1, (activeTokens / tokenCapacity) * 100));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="relative w-full max-w-lg bg-[#0F172A] border border-white/10 rounded-2xl shadow-2xl overflow-hidden text-sm">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative w-full max-w-lg max-h-[85dvh] flex flex-col bg-[#0F172A] border border-white/10 rounded-2xl shadow-2xl overflow-hidden text-sm">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10 bg-[#1E293B]/60">
           <div className="flex items-center gap-2.5">
@@ -53,10 +53,10 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
           {/* Strategy Card */}
           <div className="p-3.5 rounded-xl bg-[#1E293B]/40 border border-white/5 space-y-2">
-            <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
               <span className="text-[#94A3B8]">Context Architecture:</span>
               <span className="font-mono text-[#38BDF8] bg-[#38BDF8]/10 px-2 py-0.5 rounded border border-[#38BDF8]/20">
                 Last {maxRecent} Messages + Running Summary
@@ -93,7 +93,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
                 <span className="font-display font-bold text-lg text-white">
                   {totalCount}
                 </span>
-                <span className="text-xs text-[#94A3B8]">in SQLite DB</span>
+                <span className="text-xs text-[#94A3B8]">in PostgreSQL</span>
               </div>
               <div className="flex items-center gap-1 mt-2 text-[10px] text-emerald-400">
                 <Database className="w-3 h-3" />
@@ -104,7 +104,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
 
           {/* Token Context Meter */}
           <div className="p-3 rounded-xl bg-[#111827] border border-white/5 space-y-1.5">
-            <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
               <span className="text-[#94A3B8]">Active Ingested Tokens</span>
               <span className="font-mono text-[#A5B4FC]">
                 {activeTokens.toLocaleString()} / 1,000,000 tk ({percentUsed.toFixed(2)}%)
@@ -153,7 +153,7 @@ export const MemoryModal: React.FC<MemoryModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t border-white/10 bg-[#1E293B]/40">
+        <div className="flex items-center justify-between gap-2 p-3.5 sm:p-4 border-t border-white/10 bg-[#1E293B]/40 shrink-0">
           <button
             onClick={() => {
               onResetContext();

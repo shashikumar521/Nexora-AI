@@ -15,9 +15,13 @@ import 'prismjs/components/prism-yaml';
 
 interface MarkdownRendererProps {
   content: string;
+  showSyntaxHighlighting?: boolean;
 }
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+  content,
+  showSyntaxHighlighting = true,
+}) => {
   const blocks = useMemo(() => parseBlocks(content), [content]);
 
   return (
@@ -31,6 +35,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) =
                 language={block.language || 'text'}
                 filename={block.filename}
                 code={block.content}
+                showSyntaxHighlighting={showSyntaxHighlighting}
               />
             );
           case 'callout':
@@ -428,16 +433,22 @@ const HeadingBlock: React.FC<{ level: number; text: string }> = ({ level, text }
   }
 };
 
-const CodeBlock: React.FC<{ language: string; filename?: string; code: string }> = ({
+const CodeBlock: React.FC<{
+  language: string;
+  filename?: string;
+  code: string;
+  showSyntaxHighlighting?: boolean;
+}> = ({
   language,
   filename,
   code,
+  showSyntaxHighlighting = true,
 }) => {
   const [copied, setCopied] = useState(false);
 
   const highlightedHtml = useMemo(() => {
-    return highlightCode(code, language);
-  }, [code, language]);
+    return showSyntaxHighlighting ? highlightCode(code, language) : escapeHtml(code);
+  }, [code, language, showSyntaxHighlighting]);
 
   const handleCopy = () => {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -489,9 +500,11 @@ const CodeBlock: React.FC<{ language: string; filename?: string; code: string }>
             </span>
           </div>
 
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[#1F2937] text-[#94A3B8] border border-white/5 shrink-0">
-            {language}
-          </span>
+          {showSyntaxHighlighting && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[#1F2937] text-[#94A3B8] border border-white/5 shrink-0">
+              {language}
+            </span>
+          )}
         </div>
 
         <button

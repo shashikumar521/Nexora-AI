@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Menu,
   Sparkles,
@@ -9,9 +9,11 @@ import {
   Trash2,
   ChevronDown,
   Cpu,
+  LogOut,
 } from 'lucide-react';
 import { NexoraLogo } from './NexoraLogo';
 import { MemoryStatus } from '../types';
+import { type AuthUser } from '../lib/firebase';
 import { formatModelDisplayName } from '../utils/format';
 
 interface ChatHeaderProps {
@@ -25,6 +27,8 @@ interface ChatHeaderProps {
   theme: 'dark' | 'light' | 'system';
   onToggleTheme: () => void;
   memoryStatus: MemoryStatus | null;
+  user: AuthUser;
+  onSignOut: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -38,7 +42,21 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   theme,
   onToggleTheme,
   memoryStatus,
+  user,
+  onSignOut,
 }) => {
+  const [avatarError, setAvatarError] = useState(false);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [user.photoURL]);
+
+  const userInitials = (user.displayName || user.email || 'U')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() || '')
+    .join('') || 'U';
   const recentMsgs = memoryStatus?.recentMessagesCount || 0;
   const maxWindow = memoryStatus?.maxRecentWindow || 20;
   const hasSummary = memoryStatus?.hasRunningSummary || false;
@@ -160,6 +178,36 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             <Moon className="w-4 h-4 text-[var(--nx-accent-text)]" />
           )}
         </button>
+
+        {/* User Avatar & Sign Out */}
+        <div className="hidden sm:flex items-center gap-1 pl-1 ml-0.5 border-l border-[var(--nx-border-subtle)]">
+          {user.photoURL && !avatarError ? (
+            <img
+              src={user.photoURL}
+              alt={user.displayName || 'User profile'}
+              referrerPolicy="no-referrer"
+              onError={() => setAvatarError(true)}
+              title={`${user.displayName || 'Google User'} (${user.email || ''})`}
+              className="w-7 h-7 rounded-full object-cover ring-1 ring-[var(--nx-accent-border)]"
+            />
+          ) : (
+            <div
+              title={`${user.displayName || 'Google User'} (${user.email || ''})`}
+              className="w-7 h-7 rounded-full bg-gradient-to-tr from-[var(--nx-accent)] to-[var(--nx-accent-end)] flex items-center justify-center font-display font-bold text-[10px] text-white"
+            >
+              {userInitials}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-[var(--nx-text-muted)] hover:text-red-500 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors cursor-pointer"
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </header>
   );

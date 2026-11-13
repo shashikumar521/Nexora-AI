@@ -1,5 +1,21 @@
+export interface AuthContext {
+  uid: string;
+  idToken?: string;
+}
+
+export class OwnershipForbiddenError extends Error {
+  readonly httpStatus = 403;
+  readonly code = 'FORBIDDEN';
+
+  constructor(message = 'You do not have permission to access this resource.') {
+    super(message);
+    this.name = 'OwnershipForbiddenError';
+  }
+}
+
 export interface DBConversation {
   id: string;
+  owner_uid: string;
   title: string;
   created_at: string;
   updated_at: string;
@@ -10,6 +26,7 @@ export interface DBConversation {
 export interface DBMessage {
   id: string;
   conversation_id: string;
+  owner_uid?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;
@@ -37,35 +54,45 @@ export interface DatabaseAdapter {
   readonly providerName: string;
   testConnection(): Promise<{ ok: boolean; error?: string }>;
   conversations: {
-    create(id: string, title: string): Promise<DBConversation>;
-    getAll(search?: string): Promise<DBConversation[]>;
-    getById(id: string): Promise<DBConversation | undefined>;
+    create(auth: AuthContext, id: string, title: string): Promise<DBConversation>;
+    getAll(auth: AuthContext, search?: string): Promise<DBConversation[]>;
+    getById(auth: AuthContext, id: string): Promise<DBConversation | undefined>;
     update(
+      auth: AuthContext,
       id: string,
       updates: { title?: string; pinned?: boolean; running_summary?: string }
     ): Promise<DBConversation | undefined>;
-    delete(id: string): Promise<{ changes: number }>;
-    clearAll(): Promise<void>;
+    delete(auth: AuthContext, id: string): Promise<{ changes: number }>;
+    clearAll(auth: AuthContext): Promise<void>;
   };
   messages: {
     create(
+      auth: AuthContext,
       id: string,
       conversationId: string,
       role: 'user' | 'assistant' | 'system',
       content: string,
       tokens?: number
     ): Promise<DBMessage>;
-    getById(conversationId: string, id: string): Promise<DBMessage | undefined>;
-    getByConversation(conversationId: string): Promise<DBMessage[]>;
-    getCountByConversation(conversationId: string): Promise<number>;
-    getRecentMessages(conversationId: string, limitCount?: number): Promise<DBMessage[]>;
-    getOlderMessages(conversationId: string, excludeRecentCount?: number): Promise<DBMessage[]>;
-    deleteById(conversationId: string, messageId: string): Promise<void>;
-    deleteByConversation(conversationId: string): Promise<{ changes: number }>;
+    getById(auth: AuthContext, conversationId: string, id: string): Promise<DBMessage | undefined>;
+    getByConversation(auth: AuthContext, conversationId: string): Promise<DBMessage[]>;
+    getCountByConversation(auth: AuthContext, conversationId: string): Promise<number>;
+    getRecentMessages(
+      auth: AuthContext,
+      conversationId: string,
+      limitCount?: number
+    ): Promise<DBMessage[]>;
+    getOlderMessages(
+      auth: AuthContext,
+      conversationId: string,
+      excludeRecentCount?: number
+    ): Promise<DBMessage[]>;
+    deleteById(auth: AuthContext, conversationId: string, messageId: string): Promise<void>;
+    deleteByConversation(auth: AuthContext, conversationId: string): Promise<{ changes: number }>;
   };
   settings: {
-    get(key: string): Promise<string | null>;
-    set(key: string, value: string): Promise<void>;
-    getAll(): Promise<Record<string, string>>;
+    get(auth: AuthContext, key: string): Promise<string | null>;
+    set(auth: AuthContext, key: string, value: string): Promise<void>;
+    getAll(auth: AuthContext): Promise<Record<string, string>>;
   };
 }

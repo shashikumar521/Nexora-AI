@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Conversation, Message, MemoryStatus, AppSettings } from './types';
-import { api } from './services/api';
+import { api, setUnauthorizedHandler } from './services/api';
+import {
+  type AuthUser,
+  subscribeToAuthState,
+  signInWithGoogle,
+  signOutUser,
+} from './lib/firebase';
 import { Sidebar } from './components/Sidebar';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatMessage } from './components/ChatMessage';
@@ -9,10 +15,37 @@ import { NewChatHome } from './components/NewChatHome';
 import { SettingsModal } from './components/SettingsModal';
 import { MemoryModal } from './components/MemoryModal';
 import { MobileNav } from './components/MobileNav';
+import { LoginScreen } from './components/LoginScreen';
+import { NexoraLogo } from './components/NexoraLogo';
 import { formatModelDisplayName } from './utils/format';
-import { AlertCircle, Check, RotateCw } from 'lucide-react';
+import { AlertCircle, Check, Loader2, RotateCw } from 'lucide-react';
+
+const DEFAULT_SETTINGS: AppSettings = {
+  theme: 'dark',
+  typographyScale: '14px',
+  sendOnEnter: true,
+  streamResponses: true,
+  showSyntaxHighlighting: true,
+  language: 'en-US',
+  model: '',
+};
+
+function readLocalThemePreference(): 'dark' | 'light' | 'system' {
+  try {
+    const saved = localStorage.getItem('nexora_theme');
+    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+  } catch {
+    // Ignore storage restriction
+  }
+  return 'dark';
+}
 
 export default function App() {
+  // Authentication state
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   // App state
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -38,23 +71,41 @@ export default function App() {
   const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   // User Settings
-  const [settings, setSettings] = useState<AppSettings>({
-    theme: 'dark',
-    typographyScale: '14px',
-    sendOnEnter: true,
-    streamResponses: true,
-    showSyntaxHighlighting: true,
-    language: 'en-US',
-    model: '',
-  });
+  const [settings, setSettings] = useState<AppSettings>(() => ({
+    ...DEFAULT_SETTINGS,
+    theme: readLocalThemePreference(),
+  }));
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const isSubmittingRef = useRef(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevUidRef = useRef<string | null>(null);
 
   // Current active model to display everywhere
   const activeModel = backendModel || settings.model || 'gemini-3.1-flash-lite';
+
+  const resetPrivateState = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    isSubmittingRef.current = false;
+    setIsLoading(false);
+    setIsRegenerating(false);
+    setStreamingMessage('');
+    setConversations([]);
+    setActiveConversationId(null);
+    setMessages([]);
+    setMemoryStatus(null);
+    setErrorBanner(null);
+    setLastFailedPrompt(null);
+    setInputMessage('');
+    setIsSidebarOpen(false);
+    setIsSettingsOpen(false);
+    setIsMemoryModalOpen(false);
+    setIsHelpOpen(false);
+  }, []);
 
   // Apply theme to HTML root & sync system color scheme changes immediately
   useEffect(() => {
@@ -78,26 +129,65 @@ export default function App() {
     };
 
     applyTheme();
+    try {
+      localStorage.setItem('nexora_theme', settings.theme);
+    } catch {
+      // Ignore storage restriction
+    }
     mediaQuery.addEventListener('change', applyTheme);
     return () => mediaQuery.removeEventListener('change', applyTheme);
   }, [settings.theme]);
 
-  // Load initial settings and conversations
+  // Subscribe to Firebase Auth persistence across reloads and account switches
   useEffect(() => {
-    loadSettings();
-    loadConversations();
-  }, []);
+    api.getHealth()
+      .then((health) => {
+        if (health?.model) setBackendModel(health.model);
+      })
+      .catch(() => {});
+
+    const unsubscribe = subscribeToAuthState((nextUser) => {
+      const prevUid = prevUidRef.current;
+      const nextUid = nextUser?.uid || null;
+      if (prevUid !== nextUid) {
+        resetPrivateState();
+        prevUidRef.current = nextUid;
+      }
+      setUser(nextUser);
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [resetPrivateState]);
+
+  // Register global 401 session-expired handler
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      resetPrivateState();
+      setAuthError('Your session expired or was revoked. Please sign in with Google again.');
+      signOutUser().catch(() => {});
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [resetPrivateState]);
+
+  // Load initial settings and conversations ONLY after user is authenticated
+  useEffect(() => {
+    if (!authLoading && user) {
+      loadSettings();
+      loadConversations();
+    }
+  }, [authLoading, user?.uid]);
 
   // When active conversation changes, load messages & memory status
   useEffect(() => {
-    if (activeConversationId) {
+    if (user && activeConversationId) {
       loadConversationMessages(activeConversationId);
       loadMemoryStatus(activeConversationId);
     } else {
       setMessages([]);
       setMemoryStatus(null);
     }
-  }, [activeConversationId]);
+  }, [user?.uid, activeConversationId]);
 
   // Automatic scrolling: immediate during streaming to avoid lag, smooth upon completion
   useEffect(() => {
@@ -115,6 +205,7 @@ export default function App() {
   // Global keyboard shortcuts (⌘N for New Chat, Esc to cancel stream)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!user) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         handleNewChat();
@@ -127,7 +218,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isLoading]);
+  }, [isLoading, user]);
 
   const loadSettings = async () => {
     try {
@@ -420,10 +511,31 @@ export default function App() {
   };
 
   const handleQuickToggleTheme = async () => {
+    const nextTheme = settings.theme === 'dark' ? 'light' : 'dark';
+    if (!user) {
+      setSettings((prev) => ({ ...prev, theme: nextTheme }));
+      return;
+    }
     try {
-      await handleSaveSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' });
+      await handleSaveSettings({ theme: nextTheme });
     } catch (e: any) {
       setErrorBanner(e?.message || 'Failed to save theme setting.');
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    await signInWithGoogle();
+  };
+
+  const handleSignOut = async () => {
+    resetPrivateState();
+    setAuthError(null);
+    setSettings({ ...DEFAULT_SETTINGS, theme: readLocalThemePreference() });
+    try {
+      await signOutUser();
+    } catch (e) {
+      console.warn('Sign out encountered an issue:', e);
     }
   };
 
@@ -491,6 +603,30 @@ export default function App() {
       : 'history'
     : 'chat';
 
+  if (authLoading) {
+    return (
+      <div className="h-[100dvh] w-full flex flex-col items-center justify-center gap-4 px-4 select-none">
+        <NexoraLogo variant="full" size="md" showBadge={false} />
+        <div className="flex items-center gap-2 text-xs text-[var(--nx-text-muted)]">
+          <Loader2 className="w-4 h-4 animate-spin text-[var(--nx-accent)]" />
+          <span>Verifying your session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <LoginScreen
+        onGoogleSignIn={handleGoogleSignIn}
+        theme={settings.theme}
+        onToggleTheme={handleQuickToggleTheme}
+        activeModelName={activeModel}
+        externalError={authError}
+      />
+    );
+  }
+
   return (
     <div className={`flex h-[100dvh] w-full overflow-hidden ${typographyClass}`}>
       {/* Sidebar */}
@@ -504,6 +640,8 @@ export default function App() {
         onTogglePin={handleTogglePin}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenHelp={() => setIsHelpOpen(true)}
+        user={user}
+        onSignOut={handleSignOut}
         isOpen={isSidebarOpen}
         onClose={() => {
           setIsSidebarOpen(false);
@@ -529,6 +667,8 @@ export default function App() {
           theme={settings.theme}
           onToggleTheme={handleQuickToggleTheme}
           memoryStatus={memoryStatus}
+          user={user}
+          onSignOut={handleSignOut}
         />
 
         {/* Floating Notification Feedback */}
@@ -697,6 +837,8 @@ export default function App() {
         onClearAllData={handleClearAllData}
         onExportTranscripts={handleExportTranscripts}
         activeModelName={activeModel}
+        user={user}
+        onSignOut={handleSignOut}
       />
 
       {/* Conversation Memory Inspector Modal */}

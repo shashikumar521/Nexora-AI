@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Conversation } from '../types';
+import { type AuthUser } from '../lib/firebase';
 import { NexoraLogo } from './NexoraLogo';
 import {
   Plus,
@@ -14,6 +15,7 @@ import {
   HelpCircle,
   SidebarClose,
   MoreVertical,
+  LogOut,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -26,6 +28,8 @@ interface SidebarProps {
   onTogglePin: (id: string, pinned: boolean) => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  user: AuthUser;
+  onSignOut: () => void;
   isOpen: boolean;
   onClose: () => void;
   focusSearchTrigger?: number;
@@ -41,6 +45,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onTogglePin,
   onOpenSettings,
   onOpenHelp,
+  user,
+  onSignOut,
   isOpen,
   onClose,
   focusSearchTrigger = 0,
@@ -50,7 +56,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [editTitle, setEditTitle] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [user.photoURL]);
+
+  const userInitials = (user.displayName || user.email || 'U')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() || '')
+    .join('') || 'U';
 
   useEffect(() => {
     if (isOpen && focusSearchTrigger > 0) {
@@ -334,22 +352,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* User Profile Card & Quick Actions matching design */}
         <div className="p-3 border-t border-[var(--nx-border-subtle)] space-y-2">
-          {/* User Card */}
-          <div className="flex items-center gap-3 p-2 rounded-xl bg-[var(--nx-bg-surface-alt)] border border-[var(--nx-border-subtle)]">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[var(--nx-accent)] to-[var(--nx-accent-end)] flex items-center justify-center font-display font-bold text-xs text-white shadow-xs shrink-0">
-              NU
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-semibold text-[var(--nx-text-heading)] truncate">Nexora User</span>
-                <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-[var(--nx-accent-soft)] text-[var(--nx-accent-text)] border border-[var(--nx-accent-border)]">
-                  Workspace
-                </span>
+          {/* Authenticated Google User Card */}
+          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[var(--nx-bg-surface-alt)] border border-[var(--nx-border-subtle)]">
+            {user.photoURL && !avatarError ? (
+              <img
+                src={user.photoURL}
+                alt={user.displayName || 'User profile'}
+                referrerPolicy="no-referrer"
+                onError={() => setAvatarError(true)}
+                className="w-8 h-8 rounded-full object-cover ring-1 ring-[var(--nx-accent-border)] shrink-0"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[var(--nx-accent)] to-[var(--nx-accent-end)] flex items-center justify-center font-display font-bold text-xs text-white shadow-xs shrink-0">
+                {userInitials}
               </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-semibold text-[var(--nx-text-heading)] block truncate">
+                {user.displayName || 'Google User'}
+              </span>
               <span className="text-[11px] text-[var(--nx-text-muted)] block truncate">
-                Workspace • Cloud Sync
+                {user.email || 'Authenticated Account'}
               </span>
             </div>
+            <button
+              type="button"
+              onClick={onSignOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="p-1.5 rounded-lg text-[var(--nx-text-muted)] hover:text-red-500 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors cursor-pointer shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Quick buttons */}

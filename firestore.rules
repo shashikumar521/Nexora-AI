@@ -2,6 +2,18 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid is string && request.auth.uid.size() > 0;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -15,11 +27,14 @@ service cloud.firestore {
     }
 
     function isValidConversation(data, conversationId) {
-      return data.keys().hasAll(['id', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
-        data.keys().hasOnly(['id', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
+      return data.keys().hasAll(['id', 'ownerUid', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
+        data.keys().hasOnly(['id', 'ownerUid', 'title', 'created_at', 'updated_at', 'running_summary', 'pinned']) &&
         data.id is string &&
         data.id == conversationId &&
         isValidId(data.id) &&
+        data.ownerUid is string &&
+        data.ownerUid.size() > 0 &&
+        data.ownerUid.size() <= 128 &&
         data.title is string &&
         data.title.size() >= 1 &&
         data.title.size() <= 200 &&
@@ -36,14 +51,17 @@ service cloud.firestore {
     }
 
     function isValidMessage(data, conversationId, messageId) {
-      return data.keys().hasAll(['id', 'conversation_id', 'role', 'content', 'created_at', 'tokens']) &&
-        data.keys().hasOnly(['id', 'conversation_id', 'role', 'content', 'created_at', 'tokens']) &&
+      return data.keys().hasAll(['id', 'conversation_id', 'ownerUid', 'role', 'content', 'created_at', 'tokens']) &&
+        data.keys().hasOnly(['id', 'conversation_id', 'ownerUid', 'role', 'content', 'created_at', 'tokens']) &&
         data.id is string &&
         data.id == messageId &&
         isValidId(data.id) &&
         data.conversation_id is string &&
         data.conversation_id == conversationId &&
         isValidId(data.conversation_id) &&
+        data.ownerUid is string &&
+        data.ownerUid.size() > 0 &&
+        data.ownerUid.size() <= 128 &&
         data.role in ['user', 'assistant', 'system'] &&
         data.content is string &&
         data.content.size() >= 1 &&
@@ -54,6 +72,10 @@ service cloud.firestore {
         data.tokens is int &&
         data.tokens >= 0 &&
         data.tokens <= 1000000;
+    }
+
+    function isConversationOwner(conversationId) {
+      return get(/databases/$(database)/documents/conversations/$(conversationId)).data.ownerUid == request.auth.uid;
     }
 
     function isValidSettingKey(settingKey) {
@@ -77,50 +99,70 @@ service cloud.firestore {
         data.value.size() <= 100;
     }
 
-    // Default-deny global safety net
+    // Default-deny global safety net (protects legacy unowned docs and unknown paths)
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Health check document (read-only probe)
+    // Non-PII health probe endpoint
     match /_health/connection {
       allow get: if database is string;
     }
 
-    // Conversations collection
+    // User-owned conversations collection
     match /conversations/{conversationId} {
-      allow get: if isValidId(conversationId);
-      allow list: if database is string;
-      allow create: if isValidId(conversationId) && isValidConversation(incoming(), conversationId);
-      allow update: if isValidId(conversationId) &&
+      allow get: if isSignedIn() && isValidId(conversationId) && existing().ownerUid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isEmailVerified() &&
+        isValidId(conversationId) &&
         isValidConversation(incoming(), conversationId) &&
+        incoming().ownerUid == request.auth.uid;
+      allow update: if isEmailVerified() &&
+        isValidId(conversationId) &&
+        isValidConversation(incoming(), conversationId) &&
+        existing().ownerUid == request.auth.uid &&
+        incoming().ownerUid == existing().ownerUid &&
         incoming().id == existing().id &&
         incoming().created_at == existing().created_at &&
         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'pinned', 'running_summary', 'updated_at']);
-      allow delete: if isValidId(conversationId);
+      allow delete: if isSignedIn() && isValidId(conversationId) && existing().ownerUid == request.auth.uid;
 
-      // Isolated messages subcollection per conversation
+      // Isolated messages subcollection per owner conversation
       match /messages/{messageId} {
-        allow get: if isValidId(conversationId) && isValidId(messageId);
-        allow list: if isValidId(conversationId);
-        allow create: if isValidId(conversationId) &&
+        allow get: if isSignedIn() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          existing().ownerUid == request.auth.uid &&
+          isConversationOwner(conversationId);
+        allow list: if isSignedIn() &&
+          isValidId(conversationId) &&
+          resource.data.ownerUid == request.auth.uid;
+        allow create: if isEmailVerified() &&
+          isValidId(conversationId) &&
           isValidId(messageId) &&
           isValidMessage(incoming(), conversationId, messageId) &&
-          exists(/databases/$(database)/documents/conversations/$(conversationId));
+          incoming().ownerUid == request.auth.uid &&
+          isConversationOwner(conversationId);
         allow update: if false;
-        allow delete: if isValidId(conversationId) && isValidId(messageId);
+        allow delete: if isSignedIn() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          existing().ownerUid == request.auth.uid &&
+          isConversationOwner(conversationId);
       }
     }
 
-    // Persisted workspace settings
-    match /settings/{settingKey} {
-      allow get: if isValidSettingKey(settingKey);
-      allow list: if database is string;
-      allow create: if isValidSetting(incoming(), settingKey);
-      allow update: if isValidSetting(incoming(), settingKey) &&
+    // Per-user isolated workspace settings
+    match /users/{userId}/settings/{settingKey} {
+      allow get: if isOwner(userId) && isValidSettingKey(settingKey);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) && isEmailVerified() && isValidSetting(incoming(), settingKey);
+      allow update: if isOwner(userId) &&
+        isEmailVerified() &&
+        isValidSetting(incoming(), settingKey) &&
         incoming().key == existing().key &&
         incoming().diff(existing()).affectedKeys().hasOnly(['value']);
-      allow delete: if isValidSettingKey(settingKey);
+      allow delete: if isOwner(userId) && isValidSettingKey(settingKey);
     }
   }
 }

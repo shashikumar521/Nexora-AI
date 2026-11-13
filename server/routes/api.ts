@@ -1,12 +1,18 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import {
+  type AuthContext,
+  OwnershipForbiddenError,
   conversationQueries,
   messageQueries,
   settingsQueries,
   testDatabaseConnection,
   getDatabaseProviderName,
 } from '../db/database.ts';
+import {
+  requireAuth,
+  type AuthenticatedRequest,
+} from '../middleware/auth.ts';
 import {
   generateChatResponse,
   streamChatResponse,
@@ -56,6 +62,16 @@ function rateLimiter(req: Request, res: Response, next: NextFunction) {
 
 apiRouter.use(rateLimiter);
 
+function getAuthContext(req: AuthenticatedRequest): AuthContext {
+  if (!req.user?.uid) {
+    throw new OwnershipForbiddenError('Authentication required.');
+  }
+  return {
+    uid: req.user.uid,
+    idToken: req.user.idToken,
+  };
+}
+
 function redactSensitiveText(msg: string): string {
   return msg
     .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_KEY]')
@@ -66,6 +82,7 @@ function redactSensitiveText(msg: string): string {
 }
 
 type AppErrorCategory =
+  | 'FORBIDDEN'
   | 'GEMINI_AUTH_ERROR'
   | 'GEMINI_PERMISSION_ERROR'
   | 'GEMINI_MODEL_ERROR'
@@ -82,6 +99,14 @@ function classifyRouteError(err: unknown): {
   httpStatus: number;
   message: string;
 } {
+  if (err instanceof OwnershipForbiddenError) {
+    return {
+      category: 'FORBIDDEN',
+      httpStatus: 403,
+      message: err.message,
+    };
+  }
+
   if (err instanceof GeminiServiceError) {
     return {
       category: err.category,
@@ -138,6 +163,7 @@ function getDbErrorStatus(err: unknown): number {
 
 /**
  * GET /api/health
+ * Public readiness probe (never returns private user or conversation data)
  */
 apiRouter.get('/health', async (req: Request, res: Response) => {
   const hasKey = isGeminiApiKeyConfigured();
@@ -161,7 +187,10 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
   });
 });
 
-apiRouter.get('/models', async (_req: Request, res: Response) => {
+// Protect all user data, chat, model, and settings endpoints with Firebase Auth ID token verification
+apiRouter.use(requireAuth);
+
+apiRouter.get('/models', async (_req: AuthenticatedRequest, res: Response) => {
   try {
     const modelNames = await listAvailableModels();
     res.json({ models: modelNames });
@@ -181,12 +210,13 @@ apiRouter.get('/models', async (_req: Request, res: Response) => {
 
 /**
  * GET /api/conversations
- * Retrieve conversation history with optional search
+ * Retrieve authenticated user's conversation history with optional search
  */
-apiRouter.get('/conversations', async (req: Request, res: Response) => {
+apiRouter.get('/conversations', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const search = req.query.search as string | undefined;
-    const conversations = await conversationQueries.getAll(search);
+    const conversations = await conversationQueries.getAll(auth, search);
     res.json({ conversations });
   } catch (error: any) {
     console.error('[API] GET /conversations failed:', error);
@@ -197,14 +227,15 @@ apiRouter.get('/conversations', async (req: Request, res: Response) => {
 
 /**
  * POST /api/conversations
- * Create a new conversation
+ * Create a new conversation owned by the verified authenticated user
  */
-apiRouter.post('/conversations', async (req: Request, res: Response) => {
+apiRouter.post('/conversations', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const id = randomUUID();
     const rawTitle = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
     const title = (rawTitle || 'New Chat').slice(0, 200);
-    const conversation = await conversationQueries.create(id, title);
+    const conversation = await conversationQueries.create(auth, id, title);
     if (!conversation?.id) {
       return res.status(500).json({ error: 'Database did not confirm conversation creation.' });
     }
@@ -220,20 +251,21 @@ apiRouter.post('/conversations', async (req: Request, res: Response) => {
 
 /**
  * GET /api/conversations/:id
- * Retrieve a conversation and all its messages
+ * Retrieve an owned conversation and all its messages
  */
-apiRouter.get('/conversations/:id', async (req: Request, res: Response) => {
+apiRouter.get('/conversations/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
-    const conversation = await conversationQueries.getById(id);
+    const conversation = await conversationQueries.getById(auth, id);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const messages = await messageQueries.getByConversation(id);
+    const messages = await messageQueries.getByConversation(auth, id);
     res.json({ conversation, messages });
   } catch (error: any) {
     console.error('[API] GET /conversations/:id failed:', error);
@@ -243,22 +275,23 @@ apiRouter.get('/conversations/:id', async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/conversations/:id
- * Update title or pinned status
+ * Update title or pinned status for an owned conversation
  */
-apiRouter.patch('/conversations/:id', async (req: Request, res: Response) => {
+apiRouter.patch('/conversations/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
     const { title, pinned } = req.body || {};
 
-    const existing = await conversationQueries.getById(id);
+    const existing = await conversationQueries.getById(auth, id);
     if (!existing) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const updated = await conversationQueries.update(id, {
+    const updated = await conversationQueries.update(auth, id, {
       title: typeof title === 'string' && title.trim() ? title.trim() : undefined,
       pinned: typeof pinned === 'boolean' ? pinned : undefined,
     });
@@ -272,20 +305,21 @@ apiRouter.patch('/conversations/:id', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/conversations/:id
- * Delete a conversation and its messages
+ * Delete an owned conversation and its messages
  */
-apiRouter.delete('/conversations/:id', async (req: Request, res: Response) => {
+apiRouter.delete('/conversations/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
-    const existing = await conversationQueries.getById(id);
+    const existing = await conversationQueries.getById(auth, id);
     if (!existing) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    await conversationQueries.delete(id);
+    await conversationQueries.delete(auth, id);
     res.json({ success: true, id });
   } catch (error: any) {
     console.error('[API] DELETE /conversations/:id failed:', error);
@@ -295,23 +329,23 @@ apiRouter.delete('/conversations/:id', async (req: Request, res: Response) => {
 
 /**
  * GET /api/conversations/:id/memory
- * Retrieve memory status and summary metadata for a conversation
+ * Retrieve memory status and summary metadata for an owned conversation
  */
-apiRouter.get('/conversations/:id/memory', async (req: Request, res: Response) => {
+apiRouter.get('/conversations/:id/memory', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
-    const conversation = await conversationQueries.getById(id);
+    const conversation = await conversationQueries.getById(auth, id);
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    const totalMessages = await messageQueries.getCountByConversation(id);
-    const recentMessages = await messageQueries.getRecentMessages(id, RECENT_MESSAGE_WINDOW);
+    const totalMessages = await messageQueries.getCountByConversation(auth, id);
+    const recentMessages = await messageQueries.getRecentMessages(auth, id, RECENT_MESSAGE_WINDOW);
 
-    // Calculate approximate tokens for active context window
     const recentTokens = recentMessages.reduce(
       (sum, m) => sum + (m.tokens || Math.round(m.content.length / 4)),
       0
@@ -328,7 +362,7 @@ apiRouter.get('/conversations/:id/memory', async (req: Request, res: Response) =
       hasRunningSummary: Boolean(conversation.running_summary && conversation.running_summary.trim()),
       runningSummary: conversation.running_summary || null,
       activeContextTokens: totalActiveTokens,
-      tokenCapacity: 1000000, // 1M tokens capacity
+      tokenCapacity: 1000000,
     });
   } catch (error: any) {
     console.error('[API] GET /conversations/:id/memory failed:', error);
@@ -338,20 +372,21 @@ apiRouter.get('/conversations/:id/memory', async (req: Request, res: Response) =
 
 /**
  * POST /api/conversations/:id/clear
- * Clear all messages in conversation
+ * Clear all messages in an owned conversation
  */
-apiRouter.post('/conversations/:id/clear', async (req: Request, res: Response) => {
+apiRouter.post('/conversations/:id/clear', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
-    const existing = await conversationQueries.getById(id);
+    const existing = await conversationQueries.getById(auth, id);
     if (!existing) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
-    await messageQueries.deleteByConversation(id);
-    await conversationQueries.update(id, { running_summary: '' });
+    await messageQueries.deleteByConversation(auth, id);
+    await conversationQueries.update(auth, id, { running_summary: '' });
     res.json({ success: true, message: 'Conversation context reset successfully' });
   } catch (error: any) {
     console.error('[API] POST /conversations/:id/clear failed:', error);
@@ -361,9 +396,9 @@ apiRouter.post('/conversations/:id/clear', async (req: Request, res: Response) =
 
 /**
  * POST /api/chat/:id
- * Send message and receive response (standard or streaming SSE)
+ * Send message and receive response (standard or streaming SSE) inside an owned conversation
  */
-apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
+apiRouter.post('/chat/:id', async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   if (!VALID_ID_REGEX.test(id)) {
     return res.status(400).json({ error: 'Invalid conversation ID format.' });
@@ -371,7 +406,6 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
 
   const { message, stream = true } = req.body || {};
 
-  // Validation
   if (!message || typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'Message content is required and cannot be empty.' });
   }
@@ -380,7 +414,6 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Message exceeds maximum allowed length of 4,096 characters.' });
   }
 
-  // Check API key before mutating DB
   try {
     getConfiguredGeminiApiKey();
   } catch (keyErr: unknown) {
@@ -392,33 +425,31 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
   }
 
   try {
-    // Ensure conversation exists or create it
-    let conversation = await conversationQueries.getById(id);
+    const auth = getAuthContext(req);
+    // Verify ownership if conversation exists, or create under the authenticated user's UID
+    let conversation = await conversationQueries.getById(auth, id);
     if (!conversation) {
-      conversation = await conversationQueries.create(id, 'New Chat');
+      conversation = await conversationQueries.create(auth, id, 'New Chat');
     }
 
     const userMsgId = randomUUID();
     const userTokens = Math.round(message.trim().length / 4);
 
-    // Store user message
-    await messageQueries.create(userMsgId, id, 'user', message.trim(), userTokens);
+    await messageQueries.create(auth, userMsgId, id, 'user', message.trim(), userTokens);
 
-    // Auto-generate title if this is the very first turn and title is still "New Chat"
-    const totalCount = await messageQueries.getCountByConversation(id);
+    const totalCount = await messageQueries.getCountByConversation(auth, id);
     if (
       totalCount <= 2 &&
       (conversation?.title === 'New Chat' || conversation?.title === 'New Conversation')
     ) {
       generateConversationTitle(message.trim())
-        .then((autoTitle) => conversationQueries.update(id, { title: autoTitle }))
+        .then((autoTitle) => conversationQueries.update(auth, id, { title: autoTitle }))
         .catch(() => {});
     }
 
-    console.log(`[API] Received chat request for convId: ${id}`);
+    console.log(`[API] Received chat request for convId: ${id} (uid: ${auth.uid})`);
 
     if (stream) {
-      // Setup SSE headers
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
@@ -426,11 +457,12 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
 
       try {
         const assistantMsgId = randomUUID();
-        const result = await streamChatResponse(id, message.trim(), (chunkText) => {
+        const result = await streamChatResponse(auth, id, message.trim(), (chunkText) => {
           res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunkText })}\n\n`);
         });
 
         await messageQueries.create(
+          auth,
           assistantMsgId,
           id,
           'assistant',
@@ -458,7 +490,7 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
           message: classified.message,
         });
         try {
-          await messageQueries.deleteById(id, userMsgId);
+          await messageQueries.deleteById(auth, id, userMsgId);
         } catch (cleanErr) {
           console.warn('[API] Could not clean up failed user message:', cleanErr);
         }
@@ -477,10 +509,11 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
       }
     } else {
       try {
-        const result = await generateChatResponse(id, message.trim());
+        const result = await generateChatResponse(auth, id, message.trim());
         const assistantMsgId = randomUUID();
 
         const savedAssistant = await messageQueries.create(
+          auth,
           assistantMsgId,
           id,
           'assistant',
@@ -505,7 +538,7 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
           message: classified.message,
         });
         try {
-          await messageQueries.deleteById(id, userMsgId);
+          await messageQueries.deleteById(auth, id, userMsgId);
         } catch (cleanErr) {
           console.warn('[API] Could not clean up failed user message:', cleanErr);
         }
@@ -533,16 +566,22 @@ apiRouter.post('/chat/:id', async (req: Request, res: Response) => {
 
 /**
  * POST /api/conversations/:id/regenerate
- * Remove last assistant message and re-run with previous user message
+ * Remove last assistant message and re-run with previous user message for an owned conversation
  */
-apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Response) => {
+apiRouter.post('/conversations/:id/regenerate', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const { id } = req.params;
     if (!VALID_ID_REGEX.test(id)) {
       return res.status(400).json({ error: 'Invalid conversation ID format.' });
     }
 
-    const messages = await messageQueries.getByConversation(id);
+    const existing = await conversationQueries.getById(auth, id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+
+    const messages = await messageQueries.getByConversation(auth, id);
     if (messages.length === 0) {
       return res.status(400).json({ error: 'No messages to regenerate' });
     }
@@ -551,18 +590,19 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
     let promptMsg = lastMsg;
 
     if (lastMsg.role === 'assistant') {
-      await messageQueries.deleteById(id, lastMsg.id);
+      await messageQueries.deleteById(auth, id, lastMsg.id);
 
-      const remaining = await messageQueries.getByConversation(id);
+      const remaining = await messageQueries.getByConversation(auth, id);
       if (remaining.length === 0) {
         return res.status(400).json({ error: 'No user prompt found to regenerate' });
       }
       promptMsg = remaining[remaining.length - 1];
     }
 
-    const result = await generateChatResponse(id, promptMsg.content);
+    const result = await generateChatResponse(auth, id, promptMsg.content);
     const newAssistantId = randomUUID();
     const savedAssistant = await messageQueries.create(
+      auth,
       newAssistantId,
       id,
       'assistant',
@@ -592,7 +632,7 @@ apiRouter.post('/conversations/:id/regenerate', async (req: Request, res: Respon
 
 /**
  * GET & PUT /api/settings
- * Manage user preferences persisted in Cloud Firestore
+ * Manage per-user preferences persisted in database under authenticated UID
  */
 const VALID_THEMES = new Set(['dark', 'light', 'system']);
 const VALID_SCALES = new Set(['12px', '14px', '16px']);
@@ -609,9 +649,10 @@ function formatSettingsResponse(settings: Record<string, string>) {
   };
 }
 
-apiRouter.get('/settings', async (_req: Request, res: Response) => {
+apiRouter.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const settings = await settingsQueries.getAll();
+    const auth = getAuthContext(req);
+    const settings = await settingsQueries.getAll(auth);
     res.json(formatSettingsResponse(settings));
   } catch (error: any) {
     console.error('[API] GET /settings failed:', error);
@@ -622,8 +663,9 @@ apiRouter.get('/settings', async (_req: Request, res: Response) => {
   }
 });
 
-apiRouter.put('/settings', async (req: Request, res: Response) => {
+apiRouter.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const auth = getAuthContext(req);
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return res.status(400).json({ error: 'Invalid settings payload.' });
@@ -633,32 +675,32 @@ apiRouter.put('/settings', async (req: Request, res: Response) => {
       if (!VALID_THEMES.has(String(body.theme))) {
         return res.status(400).json({ error: 'Invalid theme value.' });
       }
-      await settingsQueries.set('theme', String(body.theme));
+      await settingsQueries.set(auth, 'theme', String(body.theme));
     }
     if (body.typographyScale !== undefined) {
       if (!VALID_SCALES.has(String(body.typographyScale))) {
         return res.status(400).json({ error: 'Invalid typography scale value.' });
       }
-      await settingsQueries.set('typographyScale', String(body.typographyScale));
+      await settingsQueries.set(auth, 'typographyScale', String(body.typographyScale));
     }
     if (body.sendOnEnter !== undefined) {
-      await settingsQueries.set('sendOnEnter', String(Boolean(body.sendOnEnter)));
+      await settingsQueries.set(auth, 'sendOnEnter', String(Boolean(body.sendOnEnter)));
     }
     if (body.streamResponses !== undefined) {
-      await settingsQueries.set('streamResponses', String(Boolean(body.streamResponses)));
+      await settingsQueries.set(auth, 'streamResponses', String(Boolean(body.streamResponses)));
     }
     if (body.showSyntaxHighlighting !== undefined) {
-      await settingsQueries.set('showSyntaxHighlighting', String(Boolean(body.showSyntaxHighlighting)));
+      await settingsQueries.set(auth, 'showSyntaxHighlighting', String(Boolean(body.showSyntaxHighlighting)));
     }
     if (body.language !== undefined) {
       const lang = String(body.language).trim().slice(0, 32);
       if (!lang) {
         return res.status(400).json({ error: 'Invalid language value.' });
       }
-      await settingsQueries.set('language', lang);
+      await settingsQueries.set(auth, 'language', lang);
     }
 
-    const updated = await settingsQueries.getAll();
+    const updated = await settingsQueries.getAll(auth);
     res.json({ success: true, settings: formatSettingsResponse(updated) });
   } catch (error: any) {
     console.error('[API] PUT /settings failed:', error);
@@ -669,12 +711,13 @@ apiRouter.put('/settings', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/data/clear
- * Irreversible wipe of all conversations and messages
+ * Irreversible wipe of ONLY the authenticated user's own conversations and messages
  */
-apiRouter.delete('/data/clear', async (_req: Request, res: Response) => {
+apiRouter.delete('/data/clear', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    await conversationQueries.clearAll();
-    res.json({ success: true, message: 'All workspace data cleared successfully' });
+    const auth = getAuthContext(req);
+    await conversationQueries.clearAll(auth);
+    res.json({ success: true, message: 'All workspace data for your account cleared successfully' });
   } catch (error: any) {
     console.error('[API] DELETE /data/clear failed:', error);
     res.status(getDbErrorStatus(error)).json({ error: sanitizeErrorMessage(error) || 'Failed to clear workspace data.' });

@@ -1,7 +1,53 @@
 import { Conversation, Message, MemoryStatus, AppSettings, HealthStatus } from '../types';
+import { getCurrentIdToken } from '../lib/firebase';
+
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
 
 function apiUrl(path: string): string {
   return path.startsWith('/') ? path : `/${path}`;
+}
+
+async function authenticatedFetch(
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const makeRequest = async (forceRefresh: boolean) => {
+    const token = await getCurrentIdToken(forceRefresh);
+    if (!token) {
+      unauthorizedHandler?.();
+      throw new Error('Authentication required. Please sign in with Google.');
+    }
+
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+
+    return fetch(apiUrl(path), {
+      ...init,
+      headers,
+    });
+  };
+
+  let res = await makeRequest(false);
+
+  if (res.status === 401) {
+    // Attempt a silent token refresh once before failing
+    try {
+      const retryRes = await makeRequest(true);
+      if (retryRes.status !== 401) {
+        return retryRes;
+      }
+      res = retryRes;
+    } catch {
+      // Fall through to 401 handler
+    }
+    unauthorizedHandler?.();
+  }
+
+  return res;
 }
 
 async function parseJsonResponse<T>(res: Response, fallbackError: string): Promise<T> {
@@ -40,7 +86,7 @@ export const api = {
 
   async getConversations(search?: string): Promise<Conversation[]> {
     const query = search ? `?search=${encodeURIComponent(search)}` : '';
-    const res = await fetch(apiUrl(`/api/conversations${query}`));
+    const res = await authenticatedFetch(`/api/conversations${query}`);
     const data = await parseJsonResponse<{ conversations?: Conversation[] }>(
       res,
       'Failed to fetch conversations'
@@ -49,7 +95,7 @@ export const api = {
   },
 
   async getConversation(id: string): Promise<{ conversation: Conversation; messages: Message[] }> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`));
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}`);
     return parseJsonResponse<{ conversation: Conversation; messages: Message[] }>(
       res,
       'Failed to fetch conversation'
@@ -57,7 +103,7 @@ export const api = {
   },
 
   async createConversation(title?: string): Promise<Conversation> {
-    const res = await fetch(apiUrl('/api/conversations'), {
+    const res = await authenticatedFetch('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: title || 'New Chat' }),
@@ -76,7 +122,7 @@ export const api = {
     id: string,
     updates: { title?: string; pinned?: boolean }
   ): Promise<Conversation> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`), {
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -89,38 +135,38 @@ export const api = {
   },
 
   async deleteConversation(id: string): Promise<void> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}`), {
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
     await parseJsonResponse(res, 'Failed to delete conversation');
   },
 
   async getMemoryStatus(id: string): Promise<MemoryStatus> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/memory`));
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}/memory`);
     return parseJsonResponse<MemoryStatus>(res, 'Failed to fetch memory status');
   },
 
   async clearConversationContext(id: string): Promise<void> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/clear`), {
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}/clear`, {
       method: 'POST',
     });
     await parseJsonResponse(res, 'Failed to reset conversation context');
   },
 
   async clearAllData(): Promise<void> {
-    const res = await fetch(apiUrl('/api/data/clear'), {
+    const res = await authenticatedFetch('/api/data/clear', {
       method: 'DELETE',
     });
     await parseJsonResponse(res, 'Failed to wipe workspace data');
   },
 
   async getSettings(): Promise<AppSettings> {
-    const res = await fetch(apiUrl('/api/settings'));
+    const res = await authenticatedFetch('/api/settings');
     return parseJsonResponse<AppSettings>(res, 'Failed to load settings');
   },
 
   async updateSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
-    const res = await fetch(apiUrl('/api/settings'), {
+    const res = await authenticatedFetch('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
@@ -138,7 +184,7 @@ export const api = {
   async regenerate(
     id: string
   ): Promise<{ assistantMessage: Message; model: string; latencyMs: number; tokens: number }> {
-    const res = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(id)}/regenerate`), {
+    const res = await authenticatedFetch(`/api/conversations/${encodeURIComponent(id)}/regenerate`, {
       method: 'POST',
     });
     return parseJsonResponse<{
@@ -160,7 +206,7 @@ export const api = {
     tokens: number;
     runningSummary?: string;
   }> {
-    const res = await fetch(apiUrl(`/api/chat/${encodeURIComponent(conversationId)}`), {
+    const res = await authenticatedFetch(`/api/chat/${encodeURIComponent(conversationId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, stream: false }),
@@ -183,7 +229,7 @@ export const api = {
     }) => void,
     onError: (err: string) => void
   ) {
-    fetch(apiUrl(`/api/chat/${encodeURIComponent(conversationId)}`), {
+    authenticatedFetch(`/api/chat/${encodeURIComponent(conversationId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, stream: true }),
@@ -194,9 +240,10 @@ export const api = {
           const errData = await response.json().catch(() => ({ error: '' }));
           let msg = errData.error;
           if (!msg) {
-            if (response.status === 429) msg = 'Gemini API rate limit exceeded. Please wait a moment and try again.';
+            if (response.status === 401) msg = 'Your session expired. Please sign in with Google again.';
+            else if (response.status === 429) msg = 'Gemini API rate limit exceeded. Please wait a moment and try again.';
             else if (response.status === 503) msg = 'The AI model is currently busy. Please retry in a few moments.';
-            else if (response.status === 403) msg = 'Permission denied. Please verify your Gemini API key or CORS configuration.';
+            else if (response.status === 403) msg = 'Permission denied. Please verify your account access or API configuration.';
             else msg = `Server error (${response.status}). Please try again.`;
           }
           onError(msg);

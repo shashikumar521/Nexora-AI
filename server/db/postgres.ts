@@ -1,8 +1,10 @@
 import { Pool, type PoolConfig } from 'pg';
 import {
+  type AuthContext,
   type DBConversation,
   type DBMessage,
   type DatabaseAdapter,
+  OwnershipForbiddenError,
   VALID_SETTING_KEYS,
   nextIsoTimestamp,
 } from './types.ts';
@@ -65,6 +67,9 @@ function getPool(): Pool {
 }
 
 function normalizePgError(action: string, error: unknown): Error {
+  if (error instanceof OwnershipForbiddenError) {
+    return error;
+  }
   const errObj = error as { code?: string; message?: string };
   const rawMessage = errObj?.message || String(error);
   const sanitized = rawMessage
@@ -113,6 +118,7 @@ async function ensureSchema(): Promise<void> {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS conversations (
           id VARCHAR(128) PRIMARY KEY,
+          owner_uid VARCHAR(128),
           title VARCHAR(200) NOT NULL DEFAULT 'New Chat',
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -120,28 +126,34 @@ async function ensureSchema(): Promise<void> {
           pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1))
         );
 
+        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS owner_uid VARCHAR(128);
+
         CREATE TABLE IF NOT EXISTS messages (
           id VARCHAR(128) PRIMARY KEY,
           conversation_id VARCHAR(128) NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+          owner_uid VARCHAR(128),
           role VARCHAR(16) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
           content TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           tokens INTEGER NOT NULL DEFAULT 0 CHECK (tokens >= 0)
         );
 
-        CREATE TABLE IF NOT EXISTS settings (
-          key VARCHAR(64) PRIMARY KEY,
-          value VARCHAR(255) NOT NULL
+        ALTER TABLE messages ADD COLUMN IF NOT EXISTS owner_uid VARCHAR(128);
+
+        CREATE TABLE IF NOT EXISTS user_settings (
+          uid VARCHAR(128) NOT NULL,
+          key VARCHAR(64) NOT NULL,
+          value VARCHAR(255) NOT NULL,
+          PRIMARY KEY (uid, key)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_conversations_pinned_updated
-          ON conversations (pinned DESC, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_conversations_owner_pinned_updated
+          ON conversations (owner_uid, pinned DESC, updated_at DESC);
 
         CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
           ON messages (conversation_id, created_at ASC);
       `);
     })().catch((err) => {
-      // Allow future requests to retry schema initialization after transient failure
       globalThis._nexoraPgSchemaPromise = null;
       throw err;
     });
@@ -162,6 +174,7 @@ function toIso(value: unknown): string {
 function mapConversationRow(row: Record<string, any>): DBConversation {
   return {
     id: String(row.id),
+    owner_uid: String(row.owner_uid ?? ''),
     title: String(row.title ?? 'New Chat'),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
@@ -174,6 +187,7 @@ function mapMessageRow(row: Record<string, any>): DBMessage {
   return {
     id: String(row.id),
     conversation_id: String(row.conversation_id),
+    owner_uid: row.owner_uid ? String(row.owner_uid) : undefined,
     role: row.role as DBMessage['role'],
     content: String(row.content ?? ''),
     created_at: toIso(row.created_at),
@@ -183,6 +197,32 @@ function mapMessageRow(row: Record<string, any>): DBMessage {
 
 function escapeIlikePattern(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
+}
+
+function assertUid(auth: AuthContext): string {
+  const uid = auth?.uid?.trim();
+  if (!uid) {
+    throw new OwnershipForbiddenError('Authenticated user UID is required.');
+  }
+  return uid;
+}
+
+async function assertConversationOwnership(
+  uid: string,
+  conversationId: string
+): Promise<DBConversation | undefined> {
+  const res = await getPool().query(
+    `SELECT id, owner_uid, title, created_at, updated_at, running_summary, pinned
+     FROM conversations
+     WHERE id = $1`,
+    [conversationId]
+  );
+  if (!res.rows[0]) return undefined;
+  const conv = mapConversationRow(res.rows[0]);
+  if (!conv.owner_uid || conv.owner_uid !== uid) {
+    throw new OwnershipForbiddenError('You do not have permission to access this conversation.');
+  }
+  return conv;
 }
 
 export const postgresAdapter: DatabaseAdapter = {
@@ -200,16 +240,17 @@ export const postgresAdapter: DatabaseAdapter = {
   },
 
   conversations: {
-    async create(id: string, title: string): Promise<DBConversation> {
+    async create(auth: AuthContext, id: string, title: string): Promise<DBConversation> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
         const now = nextIsoTimestamp();
         const safeTitle = title.slice(0, 200) || 'New Chat';
         const res = await getPool().query(
-          `INSERT INTO conversations (id, title, created_at, updated_at, running_summary, pinned)
-           VALUES ($1, $2, $3::timestamptz, $4::timestamptz, '', 0)
-           RETURNING id, title, created_at, updated_at, running_summary, pinned`,
-          [id, safeTitle, now, now]
+          `INSERT INTO conversations (id, owner_uid, title, created_at, updated_at, running_summary, pinned)
+           VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, '', 0)
+           RETURNING id, owner_uid, title, created_at, updated_at, running_summary, pinned`,
+          [id, uid, safeTitle, now, now]
         );
         return mapConversationRow(res.rows[0]);
       } catch (error) {
@@ -217,22 +258,25 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getAll(search?: string): Promise<DBConversation[]> {
+    async getAll(auth: AuthContext, search?: string): Promise<DBConversation[]> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
         const trimmed = search?.trim();
         const res = trimmed
           ? await getPool().query(
-              `SELECT id, title, created_at, updated_at, running_summary, pinned
+              `SELECT id, owner_uid, title, created_at, updated_at, running_summary, pinned
                FROM conversations
-               WHERE title ILIKE $1 ESCAPE '\\'
+               WHERE owner_uid = $1 AND title ILIKE $2 ESCAPE '\\'
                ORDER BY pinned DESC, updated_at DESC`,
-              [`%${escapeIlikePattern(trimmed)}%`]
+              [uid, `%${escapeIlikePattern(trimmed)}%`]
             )
           : await getPool().query(
-              `SELECT id, title, created_at, updated_at, running_summary, pinned
+              `SELECT id, owner_uid, title, created_at, updated_at, running_summary, pinned
                FROM conversations
-               ORDER BY pinned DESC, updated_at DESC`
+               WHERE owner_uid = $1
+               ORDER BY pinned DESC, updated_at DESC`,
+              [uid]
             );
         return res.rows.map(mapConversationRow);
       } catch (error) {
@@ -240,27 +284,27 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getById(id: string): Promise<DBConversation | undefined> {
+    async getById(auth: AuthContext, id: string): Promise<DBConversation | undefined> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
-        const res = await getPool().query(
-          `SELECT id, title, created_at, updated_at, running_summary, pinned
-           FROM conversations
-           WHERE id = $1`,
-          [id]
-        );
-        return res.rows[0] ? mapConversationRow(res.rows[0]) : undefined;
+        return await assertConversationOwnership(uid, id);
       } catch (error) {
         throw normalizePgError('fetching conversation', error);
       }
     },
 
     async update(
+      auth: AuthContext,
       id: string,
       updates: { title?: string; pinned?: boolean; running_summary?: string }
     ): Promise<DBConversation | undefined> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, id);
+        if (!existing) return undefined;
+
         const setClauses: string[] = [];
         const values: unknown[] = [];
         let paramIdx = 1;
@@ -282,12 +326,12 @@ export const postgresAdapter: DatabaseAdapter = {
         setClauses.push(`updated_at = $${paramIdx++}::timestamptz`);
         values.push(now);
 
-        values.push(id);
+        values.push(id, uid);
         const res = await getPool().query(
           `UPDATE conversations
            SET ${setClauses.join(', ')}
-           WHERE id = $${paramIdx}
-           RETURNING id, title, created_at, updated_at, running_summary, pinned`,
+           WHERE id = $${paramIdx} AND owner_uid = $${paramIdx + 1}
+           RETURNING id, owner_uid, title, created_at, updated_at, running_summary, pinned`,
           values
         );
 
@@ -297,35 +341,50 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async delete(id: string): Promise<{ changes: number }> {
+    async delete(auth: AuthContext, id: string): Promise<{ changes: number }> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
-        const res = await getPool().query('DELETE FROM conversations WHERE id = $1', [id]);
+        const existing = await assertConversationOwnership(uid, id);
+        if (!existing) return { changes: 0 };
+
+        const res = await getPool().query(
+          'DELETE FROM conversations WHERE id = $1 AND owner_uid = $2',
+          [id, uid]
+        );
         return { changes: res.rowCount ?? 0 };
       } catch (error) {
         throw normalizePgError('deleting conversation', error);
       }
     },
 
-    async clearAll(): Promise<void> {
+    async clearAll(auth: AuthContext): Promise<void> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
-        await getPool().query('DELETE FROM conversations');
+        await getPool().query('DELETE FROM conversations WHERE owner_uid = $1', [uid]);
       } catch (error) {
-        throw normalizePgError('clearing all conversations', error);
+        throw normalizePgError('clearing user conversations', error);
       }
     },
   },
 
   messages: {
     async create(
+      auth: AuthContext,
       id: string,
       conversationId: string,
       role: 'user' | 'assistant' | 'system',
       content: string,
       tokens: number = 0
     ): Promise<DBMessage> {
+      const uid = assertUid(auth);
       await ensureSchema();
+      const existing = await assertConversationOwnership(uid, conversationId);
+      if (!existing) {
+        throw new Error('Conversation not found.');
+      }
+
       const client = await getPool().connect();
       try {
         const now = nextIsoTimestamp();
@@ -333,16 +392,16 @@ export const postgresAdapter: DatabaseAdapter = {
 
         await client.query('BEGIN');
         const msgRes = await client.query(
-          `INSERT INTO messages (id, conversation_id, role, content, created_at, tokens)
-           VALUES ($1, $2, $3, $4, $5::timestamptz, $6)
-           RETURNING id, conversation_id, role, content, created_at, tokens`,
-          [id, conversationId, role, content, now, safeTokens]
+          `INSERT INTO messages (id, conversation_id, owner_uid, role, content, created_at, tokens)
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7)
+           RETURNING id, conversation_id, owner_uid, role, content, created_at, tokens`,
+          [id, conversationId, uid, role, content, now, safeTokens]
         );
         await client.query(
           `UPDATE conversations
-           SET updated_at = $2::timestamptz
-           WHERE id = $1`,
-          [conversationId, now]
+           SET updated_at = $3::timestamptz
+           WHERE id = $1 AND owner_uid = $2`,
+          [conversationId, uid, now]
         );
         await client.query('COMMIT');
 
@@ -355,11 +414,19 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getById(conversationId: string, id: string): Promise<DBMessage | undefined> {
+    async getById(
+      auth: AuthContext,
+      conversationId: string,
+      id: string
+    ): Promise<DBMessage | undefined> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return undefined;
+
         const res = await getPool().query(
-          `SELECT id, conversation_id, role, content, created_at, tokens
+          `SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
            FROM messages
            WHERE conversation_id = $1 AND id = $2`,
           [conversationId, id]
@@ -370,11 +437,15 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getByConversation(conversationId: string): Promise<DBMessage[]> {
+    async getByConversation(auth: AuthContext, conversationId: string): Promise<DBMessage[]> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return [];
+
         const res = await getPool().query(
-          `SELECT id, conversation_id, role, content, created_at, tokens
+          `SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
            FROM messages
            WHERE conversation_id = $1
            ORDER BY created_at ASC`,
@@ -386,9 +457,13 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getCountByConversation(conversationId: string): Promise<number> {
+    async getCountByConversation(auth: AuthContext, conversationId: string): Promise<number> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return 0;
+
         const res = await getPool().query(
           `SELECT COUNT(*)::int AS count
            FROM messages
@@ -401,14 +476,22 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async getRecentMessages(conversationId: string, limitCount: number = 25): Promise<DBMessage[]> {
+    async getRecentMessages(
+      auth: AuthContext,
+      conversationId: string,
+      limitCount: number = 25
+    ): Promise<DBMessage[]> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return [];
+
         const safeLimit = Math.max(1, Math.min(200, Math.floor(limitCount)));
         const res = await getPool().query(
-          `SELECT id, conversation_id, role, content, created_at, tokens
+          `SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
            FROM (
-             SELECT id, conversation_id, role, content, created_at, tokens
+             SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
              FROM messages
              WHERE conversation_id = $1
              ORDER BY created_at DESC
@@ -424,16 +507,21 @@ export const postgresAdapter: DatabaseAdapter = {
     },
 
     async getOlderMessages(
+      auth: AuthContext,
       conversationId: string,
       excludeRecentCount: number = 25
     ): Promise<DBMessage[]> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return [];
+
         const safeOffset = Math.max(0, Math.floor(excludeRecentCount));
         const res = await getPool().query(
-          `SELECT id, conversation_id, role, content, created_at, tokens
+          `SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
            FROM (
-             SELECT id, conversation_id, role, content, created_at, tokens
+             SELECT id, conversation_id, owner_uid, role, content, created_at, tokens
              FROM messages
              WHERE conversation_id = $1
              ORDER BY created_at DESC
@@ -448,9 +536,17 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async deleteById(conversationId: string, messageId: string): Promise<void> {
+    async deleteById(
+      auth: AuthContext,
+      conversationId: string,
+      messageId: string
+    ): Promise<void> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return;
+
         await getPool().query(
           'DELETE FROM messages WHERE conversation_id = $1 AND id = $2',
           [conversationId, messageId]
@@ -460,9 +556,16 @@ export const postgresAdapter: DatabaseAdapter = {
       }
     },
 
-    async deleteByConversation(conversationId: string): Promise<{ changes: number }> {
+    async deleteByConversation(
+      auth: AuthContext,
+      conversationId: string
+    ): Promise<{ changes: number }> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
+        const existing = await assertConversationOwnership(uid, conversationId);
+        if (!existing) return { changes: 0 };
+
         const res = await getPool().query('DELETE FROM messages WHERE conversation_id = $1', [
           conversationId,
         ]);
@@ -474,36 +577,45 @@ export const postgresAdapter: DatabaseAdapter = {
   },
 
   settings: {
-    async get(key: string): Promise<string | null> {
+    async get(auth: AuthContext, key: string): Promise<string | null> {
       if (!VALID_SETTING_KEYS.has(key)) return null;
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
-        const res = await getPool().query('SELECT value FROM settings WHERE key = $1', [key]);
+        const res = await getPool().query(
+          'SELECT value FROM user_settings WHERE uid = $1 AND key = $2',
+          [uid, key]
+        );
         return res.rows[0]?.value ?? null;
       } catch (error) {
         throw normalizePgError('reading setting', error);
       }
     },
 
-    async set(key: string, value: string): Promise<void> {
+    async set(auth: AuthContext, key: string, value: string): Promise<void> {
       if (!VALID_SETTING_KEYS.has(key)) return;
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
         await getPool().query(
-          `INSERT INTO settings (key, value)
-           VALUES ($1, $2)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-          [key, String(value).slice(0, 100)]
+          `INSERT INTO user_settings (uid, key, value)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (uid, key) DO UPDATE SET value = EXCLUDED.value`,
+          [uid, key, String(value).slice(0, 100)]
         );
       } catch (error) {
         throw normalizePgError('saving setting', error);
       }
     },
 
-    async getAll(): Promise<Record<string, string>> {
+    async getAll(auth: AuthContext): Promise<Record<string, string>> {
       try {
+        const uid = assertUid(auth);
         await ensureSchema();
-        const res = await getPool().query('SELECT key, value FROM settings');
+        const res = await getPool().query(
+          'SELECT key, value FROM user_settings WHERE uid = $1',
+          [uid]
+        );
         const result: Record<string, string> = {};
         for (const row of res.rows) {
           if (row.key && row.value !== undefined) {

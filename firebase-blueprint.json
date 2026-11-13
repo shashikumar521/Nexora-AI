@@ -2,7 +2,7 @@
   "entities": {
     "Conversation": {
       "title": "Conversation",
-      "description": "An isolated Nexora AI chat conversation with metadata and progressive running summary.",
+      "description": "An isolated user-owned Nexora AI chat conversation with metadata and progressive running summary.",
       "type": "object",
       "properties": {
         "id": {
@@ -11,6 +11,12 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the conversation owner",
+          "minLength": 1,
+          "maxLength": 128
         },
         "title": {
           "type": "string",
@@ -38,11 +44,11 @@
           "description": "Pin status (0 = unpinned, 1 = pinned)"
         }
       },
-      "required": ["id", "title", "created_at", "updated_at", "running_summary", "pinned"]
+      "required": ["id", "ownerUid", "title", "created_at", "updated_at", "running_summary", "pinned"]
     },
     "Message": {
       "title": "Message",
-      "description": "A single conversational turn inside an isolated conversation.",
+      "description": "A single conversational turn inside an owner-isolated conversation.",
       "type": "object",
       "properties": {
         "id": {
@@ -58,6 +64,12 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the parent conversation owner",
+          "minLength": 1,
+          "maxLength": 128
         },
         "role": {
           "type": "string",
@@ -80,11 +92,11 @@
           "description": "Approximate token count for the message"
         }
       },
-      "required": ["id", "conversation_id", "role", "content", "created_at", "tokens"]
+      "required": ["id", "conversation_id", "ownerUid", "role", "content", "created_at", "tokens"]
     },
     "Setting": {
       "title": "Setting",
-      "description": "Persisted application preference key/value entry.",
+      "description": "Per-user persisted application preference key/value entry.",
       "type": "object",
       "properties": {
         "key": {
@@ -104,15 +116,15 @@
   "firestore": {
     "/conversations/{conversationId}": {
       "schema": { "$ref": "#/entities/Conversation" },
-      "description": "Stores isolated conversation metadata and cumulative running summaries."
+      "description": "Stores owner-isolated conversation metadata and cumulative running summaries."
     },
     "/conversations/{conversationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/Message" },
-      "description": "Stores ordered conversation messages isolated under their parent conversation."
+      "description": "Stores ordered conversation messages isolated under their owner's parent conversation."
     },
-    "/settings/{settingKey}": {
+    "/users/{userId}/settings/{settingKey}": {
       "schema": { "$ref": "#/entities/Setting" },
-      "description": "Stores persisted application settings."
+      "description": "Stores per-user persisted workspace settings scoped by authenticated UID."
     }
   }
 }

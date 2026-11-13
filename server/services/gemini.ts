@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { NEXORA_SYSTEM_PROMPT } from '../prompts/systemPrompt.ts';
-import { conversationQueries, messageQueries } from '../db/database.ts';
+import { type AuthContext, conversationQueries, messageQueries } from '../db/database.ts';
 
 export const RECENT_MESSAGE_WINDOW = 20;
 export const PRIMARY_DEFAULT_MODEL = 'gemini-3.1-flash-lite';
@@ -397,16 +397,23 @@ export function classifyGeminiError(err: unknown, model: string): GeminiServiceE
 /**
  * Summarizes older messages when conversation history exceeds the 20-message window
  */
-export async function updateRunningSummaryIfNeeded(conversationId: string): Promise<string> {
-  const conv = await conversationQueries.getById(conversationId);
+export async function updateRunningSummaryIfNeeded(
+  auth: AuthContext,
+  conversationId: string
+): Promise<string> {
+  const conv = await conversationQueries.getById(auth, conversationId);
   if (!conv) return '';
 
-  const totalCount = await messageQueries.getCountByConversation(conversationId);
+  const totalCount = await messageQueries.getCountByConversation(auth, conversationId);
   if (totalCount <= RECENT_MESSAGE_WINDOW) {
     return conv.running_summary || '';
   }
 
-  const olderMessages = await messageQueries.getOlderMessages(conversationId, RECENT_MESSAGE_WINDOW);
+  const olderMessages = await messageQueries.getOlderMessages(
+    auth,
+    conversationId,
+    RECENT_MESSAGE_WINDOW
+  );
   if (olderMessages.length === 0) {
     return conv.running_summary || '';
   }
@@ -446,7 +453,7 @@ Provide the updated cumulative running summary:`;
 
     const newSummary = summaryResponse.text?.trim() || conv.running_summary || '';
     if (newSummary) {
-      await conversationQueries.update(conversationId, { running_summary: newSummary });
+      await conversationQueries.update(auth, conversationId, { running_summary: newSummary });
       return newSummary;
     }
   } catch (error) {
@@ -487,8 +494,12 @@ export async function generateConversationTitle(userMessage: string): Promise<st
 /**
  * Construct the full context for Gemini (System instructions + Running Summary + Last 20 messages)
  */
-export async function buildConversationContext(conversationId: string, newUserMessage?: string) {
-  const runningSummary = await updateRunningSummaryIfNeeded(conversationId);
+export async function buildConversationContext(
+  auth: AuthContext,
+  conversationId: string,
+  newUserMessage?: string
+) {
+  const runningSummary = await updateRunningSummaryIfNeeded(auth, conversationId);
 
   let systemInstruction = NEXORA_SYSTEM_PROMPT;
   if (runningSummary && runningSummary.trim()) {
@@ -496,6 +507,7 @@ export async function buildConversationContext(conversationId: string, newUserMe
   }
 
   const recentMessages = await messageQueries.getRecentMessages(
+    auth,
     conversationId,
     RECENT_MESSAGE_WINDOW
   );
@@ -673,13 +685,17 @@ export async function verifyGeminiAccess(): Promise<{
 /**
  * Generate a complete response (non-streaming)
  */
-export async function generateChatResponse(conversationId: string, userMessage: string) {
+export async function generateChatResponse(
+  auth: AuthContext,
+  conversationId: string,
+  userMessage: string
+) {
   const ai = getGenAIClient();
   const configuredModel = getActiveModel();
   const startTime = Date.now();
 
   const { systemInstruction, contents, runningSummary, recentCount } =
-    await buildConversationContext(conversationId, userMessage);
+    await buildConversationContext(auth, conversationId, userMessage);
 
   const { result: response, usedModel } = await callWithRetry(async (modelToUse, signal) => {
     return await ai.models.generateContent({
@@ -710,6 +726,7 @@ export async function generateChatResponse(conversationId: string, userMessage: 
  * Stream chat response
  */
 export async function streamChatResponse(
+  auth: AuthContext,
   conversationId: string,
   userMessage: string,
   onChunk: (chunkText: string) => void
@@ -719,7 +736,7 @@ export async function streamChatResponse(
   const startTime = Date.now();
 
   const { systemInstruction, contents, runningSummary, recentCount } =
-    await buildConversationContext(conversationId, userMessage);
+    await buildConversationContext(auth, conversationId, userMessage);
 
   const { result: responseStream, usedModel } = await callWithRetry(async (modelToUse, signal) => {
     return await ai.models.generateContentStream({

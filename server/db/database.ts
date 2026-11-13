@@ -1,8 +1,9 @@
-import type { DBConversation, DBMessage, DatabaseAdapter } from './types.ts';
-import { VALID_SETTING_KEYS, nextIsoTimestamp } from './types.ts';
+import type { AuthContext, DBConversation, DBMessage, DatabaseAdapter } from './types.ts';
+import { OwnershipForbiddenError, VALID_SETTING_KEYS, nextIsoTimestamp } from './types.ts';
 import { postgresAdapter } from './postgres.ts';
 
-export type { DBConversation, DBMessage };
+export type { AuthContext, DBConversation, DBMessage };
+export { OwnershipForbiddenError };
 
 let resolvedAdapter: DatabaseAdapter | null = null;
 let resolvingAdapterPromise: Promise<DatabaseAdapter> | null = null;
@@ -24,10 +25,21 @@ function isUsablePostgresUrl(rawUrl: string): boolean {
   }
 }
 
-function createInMemoryAdapter(): DatabaseAdapter {
+export function createInMemoryAdapter(): DatabaseAdapter {
   const conversations = new Map<string, DBConversation>();
   const messagesByConv = new Map<string, DBMessage[]>();
-  const settings = new Map<string, string>();
+  const settingsByUser = new Map<string, Map<string, string>>();
+
+  function assertOwned(auth: AuthContext, id: string): DBConversation | undefined {
+    const uid = auth?.uid?.trim();
+    if (!uid) throw new OwnershipForbiddenError();
+    const conv = conversations.get(id);
+    if (!conv) return undefined;
+    if (!conv.owner_uid || conv.owner_uid !== uid) {
+      throw new OwnershipForbiddenError('You do not have permission to access this conversation.');
+    }
+    return conv;
+  }
 
   return {
     providerName: 'In-Memory Fallback',
@@ -35,10 +47,13 @@ function createInMemoryAdapter(): DatabaseAdapter {
       return { ok: true };
     },
     conversations: {
-      async create(id: string, title: string): Promise<DBConversation> {
+      async create(auth: AuthContext, id: string, title: string): Promise<DBConversation> {
+        const uid = auth?.uid?.trim();
+        if (!uid) throw new OwnershipForbiddenError();
         const now = nextIsoTimestamp();
         const conv: DBConversation = {
           id,
+          owner_uid: uid,
           title: title.slice(0, 200) || 'New Chat',
           created_at: now,
           updated_at: now,
@@ -48,8 +63,10 @@ function createInMemoryAdapter(): DatabaseAdapter {
         conversations.set(id, conv);
         return { ...conv };
       },
-      async getAll(search?: string): Promise<DBConversation[]> {
-        let list = Array.from(conversations.values());
+      async getAll(auth: AuthContext, search?: string): Promise<DBConversation[]> {
+        const uid = auth?.uid?.trim();
+        if (!uid) throw new OwnershipForbiddenError();
+        let list = Array.from(conversations.values()).filter((c) => c.owner_uid === uid);
         if (search && search.trim()) {
           const q = search.trim().toLowerCase();
           list = list.filter((c) => c.title.toLowerCase().includes(q));
@@ -58,15 +75,16 @@ function createInMemoryAdapter(): DatabaseAdapter {
           .map((c) => ({ ...c }))
           .sort((a, b) => b.pinned - a.pinned || b.updated_at.localeCompare(a.updated_at));
       },
-      async getById(id: string): Promise<DBConversation | undefined> {
-        const conv = conversations.get(id);
+      async getById(auth: AuthContext, id: string): Promise<DBConversation | undefined> {
+        const conv = assertOwned(auth, id);
         return conv ? { ...conv } : undefined;
       },
       async update(
+        auth: AuthContext,
         id: string,
         updates: { title?: string; pinned?: boolean; running_summary?: string }
       ): Promise<DBConversation | undefined> {
-        const existing = conversations.get(id);
+        const existing = assertOwned(auth, id);
         if (!existing) return undefined;
         const updated: DBConversation = {
           ...existing,
@@ -80,29 +98,41 @@ function createInMemoryAdapter(): DatabaseAdapter {
         conversations.set(id, updated);
         return { ...updated };
       },
-      async delete(id: string): Promise<{ changes: number }> {
+      async delete(auth: AuthContext, id: string): Promise<{ changes: number }> {
+        const existing = assertOwned(auth, id);
+        if (!existing) return { changes: 0 };
         messagesByConv.delete(id);
-        const existed = conversations.delete(id);
-        return { changes: existed ? 1 : 0 };
+        conversations.delete(id);
+        return { changes: 1 };
       },
-      async clearAll(): Promise<void> {
-        conversations.clear();
-        messagesByConv.clear();
+      async clearAll(auth: AuthContext): Promise<void> {
+        const uid = auth?.uid?.trim();
+        if (!uid) throw new OwnershipForbiddenError();
+        for (const [id, conv] of conversations.entries()) {
+          if (conv.owner_uid === uid) {
+            conversations.delete(id);
+            messagesByConv.delete(id);
+          }
+        }
       },
     },
     messages: {
       async create(
+        auth: AuthContext,
         id: string,
         conversationId: string,
         role: 'user' | 'assistant' | 'system',
         content: string,
         tokens: number = 0
       ): Promise<DBMessage> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) throw new Error('Conversation not found.');
         const now = nextIsoTimestamp();
         const safeTokens = Math.max(0, Math.min(1000000, Math.round(tokens)));
         const msg: DBMessage = {
           id,
           conversation_id: conversationId,
+          owner_uid: auth.uid,
           role,
           content,
           created_at: now,
@@ -111,59 +141,81 @@ function createInMemoryAdapter(): DatabaseAdapter {
         const list = messagesByConv.get(conversationId) || [];
         list.push(msg);
         messagesByConv.set(conversationId, list);
-        const conv = conversations.get(conversationId);
-        if (conv) {
-          conversations.set(conversationId, { ...conv, updated_at: now });
-        }
+        conversations.set(conversationId, { ...conv, updated_at: now });
         return { ...msg };
       },
-      async getById(conversationId: string, id: string): Promise<DBMessage | undefined> {
+      async getById(auth: AuthContext, conversationId: string, id: string): Promise<DBMessage | undefined> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return undefined;
         const list = messagesByConv.get(conversationId) || [];
         const found = list.find((m) => m.id === id);
         return found ? { ...found } : undefined;
       },
-      async getByConversation(conversationId: string): Promise<DBMessage[]> {
+      async getByConversation(auth: AuthContext, conversationId: string): Promise<DBMessage[]> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return [];
         return (messagesByConv.get(conversationId) || []).map((m) => ({ ...m }));
       },
-      async getCountByConversation(conversationId: string): Promise<number> {
+      async getCountByConversation(auth: AuthContext, conversationId: string): Promise<number> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return 0;
         return (messagesByConv.get(conversationId) || []).length;
       },
-      async getRecentMessages(conversationId: string, limitCount: number = 25): Promise<DBMessage[]> {
+      async getRecentMessages(
+        auth: AuthContext,
+        conversationId: string,
+        limitCount: number = 25
+      ): Promise<DBMessage[]> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return [];
         const list = messagesByConv.get(conversationId) || [];
         return list.slice(-Math.max(1, limitCount)).map((m) => ({ ...m }));
       },
       async getOlderMessages(
+        auth: AuthContext,
         conversationId: string,
         excludeRecentCount: number = 25
       ): Promise<DBMessage[]> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return [];
         const list = messagesByConv.get(conversationId) || [];
         if (list.length <= excludeRecentCount) return [];
         return list.slice(0, list.length - excludeRecentCount).map((m) => ({ ...m }));
       },
-      async deleteById(conversationId: string, messageId: string): Promise<void> {
+      async deleteById(auth: AuthContext, conversationId: string, messageId: string): Promise<void> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return;
         const list = messagesByConv.get(conversationId) || [];
         messagesByConv.set(
           conversationId,
           list.filter((m) => m.id !== messageId)
         );
       },
-      async deleteByConversation(conversationId: string): Promise<{ changes: number }> {
+      async deleteByConversation(auth: AuthContext, conversationId: string): Promise<{ changes: number }> {
+        const conv = assertOwned(auth, conversationId);
+        if (!conv) return { changes: 0 };
         const count = (messagesByConv.get(conversationId) || []).length;
         messagesByConv.delete(conversationId);
         return { changes: count };
       },
     },
     settings: {
-      async get(key: string): Promise<string | null> {
+      async get(auth: AuthContext, key: string): Promise<string | null> {
         if (!VALID_SETTING_KEYS.has(key)) return null;
-        return settings.get(key) ?? null;
+        return settingsByUser.get(auth.uid)?.get(key) ?? null;
       },
-      async set(key: string, value: string): Promise<void> {
+      async set(auth: AuthContext, key: string, value: string): Promise<void> {
         if (!VALID_SETTING_KEYS.has(key)) return;
-        settings.set(key, String(value).slice(0, 100));
+        let userMap = settingsByUser.get(auth.uid);
+        if (!userMap) {
+          userMap = new Map<string, string>();
+          settingsByUser.set(auth.uid, userMap);
+        }
+        userMap.set(key, String(value).slice(0, 100));
       },
-      async getAll(): Promise<Record<string, string>> {
-        return Object.fromEntries(settings.entries());
+      async getAll(auth: AuthContext): Promise<Record<string, string>> {
+        const userMap = settingsByUser.get(auth.uid);
+        return userMap ? Object.fromEntries(userMap.entries()) : {};
       },
     },
   };
@@ -259,70 +311,87 @@ export async function testDatabaseConnection(): Promise<{ ok: boolean; error?: s
 }
 
 export const conversationQueries = {
-  create: async (id: string, title: string): Promise<DBConversation> =>
-    (await getAdapter()).conversations.create(id, title),
+  create: async (auth: AuthContext, id: string, title: string): Promise<DBConversation> =>
+    (await getAdapter()).conversations.create(auth, id, title),
 
-  getAll: async (search?: string): Promise<DBConversation[]> =>
-    (await getAdapter()).conversations.getAll(search),
+  getAll: async (auth: AuthContext, search?: string): Promise<DBConversation[]> =>
+    (await getAdapter()).conversations.getAll(auth, search),
 
-  getById: async (id: string): Promise<DBConversation | undefined> =>
-    (await getAdapter()).conversations.getById(id),
+  getById: async (auth: AuthContext, id: string): Promise<DBConversation | undefined> =>
+    (await getAdapter()).conversations.getById(auth, id),
 
   update: async (
+    auth: AuthContext,
     id: string,
     updates: { title?: string; pinned?: boolean; running_summary?: string }
   ): Promise<DBConversation | undefined> =>
-    (await getAdapter()).conversations.update(id, updates),
+    (await getAdapter()).conversations.update(auth, id, updates),
 
-  delete: async (id: string): Promise<{ changes: number }> =>
-    (await getAdapter()).conversations.delete(id),
+  delete: async (auth: AuthContext, id: string): Promise<{ changes: number }> =>
+    (await getAdapter()).conversations.delete(auth, id),
 
-  clearAll: async (): Promise<void> => (await getAdapter()).conversations.clearAll(),
+  clearAll: async (auth: AuthContext): Promise<void> =>
+    (await getAdapter()).conversations.clearAll(auth),
 };
 
 export const messageQueries = {
   create: async (
+    auth: AuthContext,
     id: string,
     conversationId: string,
     role: 'user' | 'assistant' | 'system',
     content: string,
     tokens: number = 0
   ): Promise<DBMessage> =>
-    (await getAdapter()).messages.create(id, conversationId, role, content, tokens),
+    (await getAdapter()).messages.create(auth, id, conversationId, role, content, tokens),
 
-  getById: async (conversationId: string, id: string): Promise<DBMessage | undefined> =>
-    (await getAdapter()).messages.getById(conversationId, id),
+  getById: async (
+    auth: AuthContext,
+    conversationId: string,
+    id: string
+  ): Promise<DBMessage | undefined> =>
+    (await getAdapter()).messages.getById(auth, conversationId, id),
 
-  getByConversation: async (conversationId: string): Promise<DBMessage[]> =>
-    (await getAdapter()).messages.getByConversation(conversationId),
+  getByConversation: async (auth: AuthContext, conversationId: string): Promise<DBMessage[]> =>
+    (await getAdapter()).messages.getByConversation(auth, conversationId),
 
-  getCountByConversation: async (conversationId: string): Promise<number> =>
-    (await getAdapter()).messages.getCountByConversation(conversationId),
+  getCountByConversation: async (auth: AuthContext, conversationId: string): Promise<number> =>
+    (await getAdapter()).messages.getCountByConversation(auth, conversationId),
 
   getRecentMessages: async (
+    auth: AuthContext,
     conversationId: string,
     limitCount: number = 25
   ): Promise<DBMessage[]> =>
-    (await getAdapter()).messages.getRecentMessages(conversationId, limitCount),
+    (await getAdapter()).messages.getRecentMessages(auth, conversationId, limitCount),
 
   getOlderMessages: async (
+    auth: AuthContext,
     conversationId: string,
     excludeRecentCount: number = 25
   ): Promise<DBMessage[]> =>
-    (await getAdapter()).messages.getOlderMessages(conversationId, excludeRecentCount),
+    (await getAdapter()).messages.getOlderMessages(auth, conversationId, excludeRecentCount),
 
-  deleteById: async (conversationId: string, messageId: string): Promise<void> =>
-    (await getAdapter()).messages.deleteById(conversationId, messageId),
+  deleteById: async (
+    auth: AuthContext,
+    conversationId: string,
+    messageId: string
+  ): Promise<void> => (await getAdapter()).messages.deleteById(auth, conversationId, messageId),
 
-  deleteByConversation: async (conversationId: string): Promise<{ changes: number }> =>
-    (await getAdapter()).messages.deleteByConversation(conversationId),
+  deleteByConversation: async (
+    auth: AuthContext,
+    conversationId: string
+  ): Promise<{ changes: number }> =>
+    (await getAdapter()).messages.deleteByConversation(auth, conversationId),
 };
 
 export const settingsQueries = {
-  get: async (key: string): Promise<string | null> => (await getAdapter()).settings.get(key),
+  get: async (auth: AuthContext, key: string): Promise<string | null> =>
+    (await getAdapter()).settings.get(auth, key),
 
-  set: async (key: string, value: string): Promise<void> =>
-    (await getAdapter()).settings.set(key, value),
+  set: async (auth: AuthContext, key: string, value: string): Promise<void> =>
+    (await getAdapter()).settings.set(auth, key, value),
 
-  getAll: async (): Promise<Record<string, string>> => (await getAdapter()).settings.getAll(),
+  getAll: async (auth: AuthContext): Promise<Record<string, string>> =>
+    (await getAdapter()).settings.getAll(auth),
 };

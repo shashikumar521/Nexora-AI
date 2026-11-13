@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppSettings, MemoryStatus } from '../types';
+import { type AuthUser } from '../lib/firebase';
 import {
   X,
   Sliders,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Loader2,
   AlertCircle,
+  LogOut,
 } from 'lucide-react';
 import { formatModelDisplayName } from '../utils/format';
 
@@ -28,6 +30,8 @@ interface SettingsModalProps {
   onClearAllData: () => void;
   onExportTranscripts: (format: 'json' | 'markdown') => void;
   activeModelName: string;
+  user: AuthUser;
+  onSignOut: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -40,6 +44,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClearAllData,
   onExportTranscripts,
   activeModelName,
+  user,
+  onSignOut,
 }) => {
   const [activeTab, setActiveTab] = useState<
     'general' | 'model' | 'memory' | 'privacy' | 'about'
@@ -651,12 +657,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* TAB 4: DATA & PRIVACY */}
           {activeTab === 'privacy' && (
             <div className="space-y-5 max-w-3xl">
+              {/* Authenticated Google Account */}
+              <div className="p-4 rounded-xl bg-[var(--nx-bg-surface)] border border-[var(--nx-border-subtle)] shadow-[var(--nx-card-shadow)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || 'User profile'}
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 rounded-full object-cover ring-1 ring-[var(--nx-accent-border)] shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[var(--nx-accent)] to-[var(--nx-accent-end)] flex items-center justify-center font-display font-bold text-sm text-white shrink-0">
+                      {(user.displayName || user.email || 'U')[0]?.toUpperCase() || 'U'}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-display font-semibold text-sm text-[var(--nx-text-heading)] truncate">
+                      {user.displayName || 'Google User'}
+                    </h3>
+                    <p className="text-xs text-[var(--nx-text-muted)] truncate">
+                      {user.email || 'Verified Google Account'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onSignOut();
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 sm:py-1.5 min-h-[38px] sm:min-h-0 rounded-lg bg-[var(--nx-bg-surface-alt)] hover:bg-red-500/10 hover:text-red-500 border border-[var(--nx-border-subtle)] hover:border-red-500/30 text-xs font-medium text-[var(--nx-text-heading)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+
               <div className="p-4 rounded-xl bg-[var(--nx-bg-surface)] border border-[var(--nx-border-subtle)] shadow-[var(--nx-card-shadow)] space-y-3">
                 <h3 className="font-display font-semibold text-sm text-[var(--nx-text-heading)]">
                   Storage & Persistent Data Isolation
                 </h3>
                 <p className="text-xs text-[var(--nx-text-muted)] leading-relaxed">
-                  Conversations, preferences, and summaries are stored persistently in PostgreSQL. No third-party analytics, telemetry, or external ad tracking exists in this application.
+                  Conversations, preferences, and summaries are stored persistently under your verified Firebase account UID. No third-party analytics, telemetry, or external ad tracking exists in this application.
                 </p>
               </div>
 
